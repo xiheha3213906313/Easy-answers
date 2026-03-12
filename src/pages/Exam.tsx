@@ -8,6 +8,7 @@ import { useStudyStore } from '../store/studyStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { gradeSubjectiveAnswer, gradeFillBlankAnswer, generateAiExplanation } from '../utils/aiGrader';
 import { useLogStore } from '../store/logStore';
+import { alertDialog } from '../store/confirmStore';
 
 function isAnswerWithImages(answer: unknown): answer is AnswerWithImages {
   return typeof answer === 'object' && answer !== null && 'text' in answer;
@@ -77,6 +78,35 @@ function formatReferenceAnswer(text: string): React.ReactNode {
   }
   
   return <>{lines}</>;
+}
+
+function normalizeLoose(value: string): string {
+  return (value ?? '').toString().replace(/[\s\p{P}\p{S}]+/gu, '').toLowerCase().trim();
+}
+
+function computeDuplicateFlags(userAnswers: string[], correctAnswers: string[], allowDisorder: boolean): boolean[] {
+  const normalizedUser = userAnswers.map((a) => normalizeLoose(a));
+  if (allowDisorder) {
+    const counts = new Map<string, number>();
+    normalizedUser.forEach((value) => {
+      if (!value) return;
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    });
+    return normalizedUser.map((value) => Boolean(value) && (counts.get(value) ?? 0) > 1);
+  }
+  const normalizedCorrect = correctAnswers.map((a) => normalizeLoose(a));
+  const isPositionCorrect = normalizedUser.map(
+    (value, idx) => Boolean(value) && value === normalizedCorrect[idx]
+  );
+  const counts = new Map<string, number>();
+  normalizedUser.forEach((value, idx) => {
+    if (!value || isPositionCorrect[idx]) return;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  });
+  return normalizedUser.map((value, idx) => {
+    if (!value || isPositionCorrect[idx]) return false;
+    return (counts.get(value) ?? 0) > 1;
+  });
 }
 
 const Exam: React.FC = () => {
@@ -217,13 +247,18 @@ const Exam: React.FC = () => {
   const hasDuplicateFillAnswers = useMemo(() => {
     if (!currentQuestion || currentQuestion.type !== 'fill-in-blank') return false;
     const answers = Array.isArray(currentAnswer) ? currentAnswer : [];
-    const normalized = answers.map(a => (a ?? '').toString().toLowerCase().trim()).filter(a => a !== '');
-    const seen = new Set<string>();
-    for (const a of normalized) {
-      if (seen.has(a)) return true;
-      seen.add(a);
-    }
-    return false;
+    const rawCorrect = currentQuestion.correctAnswer;
+    const correctAnswers: string[] = Array.isArray(rawCorrect)
+      ? rawCorrect.filter((a): a is string => typeof a === 'string')
+      : typeof rawCorrect === 'string'
+      ? [rawCorrect]
+      : [];
+    const duplicateFlags = computeDuplicateFlags(
+      answers.map((a) => String(a ?? '')),
+      correctAnswers,
+      currentQuestion.allowDisorder ?? false
+    );
+    return duplicateFlags.some(Boolean);
   }, [currentQuestion, currentAnswer]);
 
   if (examMode === 'bank' && !bank) {
@@ -297,7 +332,7 @@ const Exam: React.FC = () => {
       (currentQuestion.type === 'multiple-choice' && Array.isArray(currentAnswer) && currentAnswer.length > 0) ||
       (currentQuestion.type === 'fill-in-blank' &&
         Array.isArray(currentAnswer) &&
-        currentAnswer.some((a) => (a as string).trim()) &&
+        currentAnswer.some((a) => String(a ?? '').trim()) &&
         !hasDuplicateFillAnswers) ||
       (currentQuestion.type === 'subjective' && typeof currentAnswer === 'string' && currentAnswer.trim() !== ''));
 
@@ -340,11 +375,11 @@ const Exam: React.FC = () => {
 
   const handleAiExplain = async (question: Question) => {
     if (!aiSmartEnabled || !aiExplainEnabled) {
-      alert('请先开启 AI智能中的 AI解析');
+      void alertDialog('请先开启 AI智能中的 AI解析');
       return;
     }
     if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
-      alert('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
+      void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
       return;
     }
     const existing = aiExplainById[question.id];
@@ -355,10 +390,11 @@ const Exam: React.FC = () => {
       [question.id]: encouragements[Math.floor(Math.random() * encouragements.length)]
     }));
     setAiExplainById((prev) => ({ ...prev, [question.id]: { loading: true, text: prev[question.id]?.text } }));
+    const started = Date.now();
     try {
       addLog({
         level: 'info',
-        message: 'AI 解析请求已发起',
+        message: `AI 解析请求已发起 | model=${aiConfig.model || '(empty)'} | baseUrl=${aiConfig.baseUrl || '(empty)'}`,
         source: 'ai-grader'
       });
       const rawAnswer = getAnswer(question.id);
@@ -375,19 +411,20 @@ const Exam: React.FC = () => {
       });
       addLog({
         level: 'info',
-        message: `AI 解析完成: ${content}` ,
+        message: `AI 解析完成 | durationMs=${Date.now() - started} | length=${content.length}`,
         source: 'ai-grader'
       });
       setAiExplainById((prev) => ({ ...prev, [question.id]: { loading: false, text: content } }));
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'AI 解析失败';
       addLog({
         level: 'error',
-        message: err instanceof Error ? err.message : 'AI 解析失败',
+        message: `AI 解析失败 | durationMs=${Date.now() - started} | ${errMsg}`,
         stack: err instanceof Error ? err.stack : undefined,
         source: 'ai-grader'
       });
       setAiExplainById((prev) => ({ ...prev, [question.id]: { loading: false, text: prev[question.id]?.text } }));
-      alert('AI 解析失败，请检查网络或配置后重试。');
+      void alertDialog('AI 解析失败，请检查网络或配置后重试。', { title: '解析失败' });
     }
   };
 
@@ -404,9 +441,6 @@ const Exam: React.FC = () => {
     setTimeout(() => handlePostConfirm(questionId), 0);
   };
 
-
-  const normalizeLoose = (value: string) =>
-    (value ?? '').toString().replace(/[\s\p{P}\p{S}]+/gu, '').toLowerCase().trim();
 
   const computePerBlankMatches = (userAnswers: string[], correctAnswers: string[], allowDisorder: boolean) => {
     const normalizedUser = userAnswers.map((a) => normalizeLoose(a));
@@ -444,7 +478,7 @@ const Exam: React.FC = () => {
       return;
     }
     if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
-      alert('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
+      void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
       return;
     }
     const question = examState.questions.find((q) => q.id === questionId);
@@ -458,10 +492,11 @@ const Exam: React.FC = () => {
     const userAnswers = Array.isArray(getAnswer(questionId))
       ? (getAnswer(questionId) as string[])
       : [String(getAnswer(questionId) ?? '')];
+    const started = Date.now();
     try {
       addLog({
         level: 'info',
-        message: 'AI 填空判题请求已发起',
+        message: `AI 填空判题请求已发起 | model=${aiConfig.model || '(empty)'} | baseUrl=${aiConfig.baseUrl || '(empty)'} | blanks=${userAnswers.length} | allowDisorder=${String(question.allowDisorder ?? false)}`,
         source: 'ai-grader'
       });
       const grading = await gradeFillBlankAnswer({
@@ -479,7 +514,7 @@ const Exam: React.FC = () => {
       const perBlank = grading.perBlankCorrect ?? fallbackPerBlank;
       addLog({
         level: 'info',
-        message: `AI 填空判题完成: score=${grading.score}, isCorrect=${grading.isCorrect}, perBlank=${JSON.stringify(perBlank)}`,
+        message: `AI 填空判题完成 | durationMs=${Date.now() - started} | score=${grading.score} | isCorrect=${grading.isCorrect} | perBlank=${JSON.stringify(perBlank)}`,
         source: 'ai-grader'
       });
       if (grading.score > confirmed.score) {
@@ -501,13 +536,14 @@ const Exam: React.FC = () => {
       }
       setTimeout(() => handlePostConfirm(questionId), 0);
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'AI 填空判题失败';
       addLog({
         level: 'error',
-        message: err instanceof Error ? err.message : 'AI 填空判题失败',
+        message: `AI 填空判题失败 | durationMs=${Date.now() - started} | ${errMsg}`,
         stack: err instanceof Error ? err.stack : undefined,
         source: 'ai-grader'
       });
-      alert('AI 判题失败，请检查网络或配置后重试。');
+      void alertDialog('AI 判题失败，请检查网络或配置后重试。', { title: '判题失败' });
     }
   };
 
@@ -520,13 +556,14 @@ const Exam: React.FC = () => {
 
     if (aiSmartEnabled && aiGradingEnabled) {
       if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
-        alert('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
+        void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
         return;
       }
+      const started = Date.now();
       try {
         addLog({
           level: 'info',
-          message: 'AI 判题请求已发起',
+          message: `AI 判题请求已发起 | model=${aiConfig.model || '(empty)'} | baseUrl=${aiConfig.baseUrl || '(empty)'} | maxScore=${question.score}`,
           source: 'ai-grader'
         });
         const grading = await gradeSubjectiveAnswer({
@@ -534,6 +571,11 @@ const Exam: React.FC = () => {
           correctAnswer: getAnswerText(question.correctAnswer),
           maxScore: question.score,
           aiConfig
+        });
+        addLog({
+          level: 'info',
+          message: `AI 判题完成 | durationMs=${Date.now() - started} | score=${grading.score} | isCorrect=${grading.isCorrect} | similarity=${grading.similarity}`,
+          source: 'ai-grader'
         });
         const aiResult = {
           answer,
@@ -545,13 +587,14 @@ const Exam: React.FC = () => {
         setTimeout(() => handlePostConfirm(questionId), 0);
         return;
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'AI 判题失败';
         addLog({
           level: 'error',
-          message: err instanceof Error ? err.message : 'AI 判题失败',
+          message: `AI 判题失败 | durationMs=${Date.now() - started} | ${errMsg}`,
           stack: err instanceof Error ? err.stack : undefined,
           source: 'ai-grader'
         });
-        alert('AI 判题失败，请检查网络或配置后重试。');
+        void alertDialog('AI 判题失败，请检查网络或配置后重试。', { title: '判题失败' });
         return;
       }
     }
@@ -579,7 +622,7 @@ const Exam: React.FC = () => {
     }
     if (currentQuestion.type === 'fill-in-blank') {
       if (hasDuplicateFillAnswers) {
-        alert('填空答案不能重复，请修改后再判断。');
+        void alertDialog('填空答案不能重复，请修改后再判断。', { title: '答案重复' });
         stopJudging(currentQuestion.id);
         return;
       }
@@ -771,17 +814,13 @@ const Exam: React.FC = () => {
         const allowDisorder = question.allowDisorder ?? false;
         const touchedSet = fillTouched[question.id] || new Set<number>();
         const normalizedCorrect = correctAnswers.map(a => normalizeLoose(a));
-        const normalize = (value: string) => normalizeLoose(value);
-        const normalizedUser = blankAnswers.map(a => normalize((a as string) || '')).filter(a => a !== '');
-        const duplicates = new Set<string>();
-        const seen = new Set<string>();
-        normalizedUser.forEach((a) => {
-          if (seen.has(a)) duplicates.add(a);
-          seen.add(a);
-        });
-        const isDuplicateValue = (value: string) => duplicates.has(normalize(value));
+        const duplicateFlags = computeDuplicateFlags(
+          blankAnswers.map((a) => String(a ?? '')),
+          correctAnswers,
+          allowDisorder
+        );
         const isRealtimeMatch = (value: string, idx: number) => {
-          const normalized = normalize(value);
+          const normalized = normalizeLoose(value);
           if (!normalized) return false;
           if (allowDisorder) return normalizedCorrect.includes(normalized);
           return normalizedCorrect[idx] === normalized;
@@ -814,7 +853,7 @@ const Exam: React.FC = () => {
                     }}
                     disabled={isConfirmed}
                     className={`input-styled py-3 ${isConfirmed ? 'input-disabled' : ''} ${
-                      isDuplicateValue((blankAnswers[idx] as string) || '')
+                      duplicateFlags[idx]
                         ? 'input-error'
                         : realtimeCheckEnabled && touchedSet.has(idx) && !isConfirmed
                         ? isRealtimeMatch((blankAnswers[idx] as string) || '', idx)

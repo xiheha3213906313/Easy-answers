@@ -7,6 +7,7 @@ import { useQuestionBankStore } from './store/questionBankStore';
 import { useRecordStore } from './store/recordStore';
 import { useSettingsStore } from './store/settingsStore';
 import { useStudyStore } from './store/studyStore';
+import ConfirmHost from './components/ConfirmHost';
 
 const Home = lazy(() => import('./pages/Home'));
 const BankList = lazy(() => import('./pages/BankList'));
@@ -155,6 +156,7 @@ const App: React.FC = () => {
         <Route path="/logs" element={<Logs />} />
       </Routes>
       </Suspense>
+      <ConfirmHost />
     </HashRouter>
   );
 };

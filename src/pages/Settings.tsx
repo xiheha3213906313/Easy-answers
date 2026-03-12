@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSettingsStore, ThemeMode } from '../store/settingsStore';
 import { testAiConnection } from '../utils/aiGrader';
+import { alertDialog } from '../store/confirmStore';
 
 const Settings: React.FC = () => {
   const {
@@ -189,15 +190,15 @@ const Settings: React.FC = () => {
                   disabled={aiTesting}
                   onClick={async () => {
                     if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
-                      alert('请先填写 API Key / Base URL / 模型');
+                      void alertDialog('请先填写 API Key / Base URL / 模型');
                       return;
                     }
                     try {
                       setAiTesting(true);
                       await testAiConnection(aiConfig);
-                      alert('连接成功');
+                      void alertDialog('连接成功', { title: '连接成功', confirmText: '好的' });
                     } catch (err) {
-                      alert('连接失败，请检查配置或网络');
+                      void alertDialog('连接失败，请检查配置或网络', { title: '连接失败', confirmText: '我知道了' });
                     } finally {
                       setAiTesting(false);
                     }

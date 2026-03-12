@@ -68,25 +68,39 @@ const checkAnswer = (question: Question, answer: string | string[]): { isCorrect
       ? answer 
       : [answer];
 
-    const normalizedUser = userAnswers.map(a => (a as string).toLowerCase().trim()).filter(a => a !== '');
-    const duplicateSet = new Set<string>();
-    const seen = new Set<string>();
-    normalizedUser.forEach((a) => {
-      if (seen.has(a)) duplicateSet.add(a);
-      seen.add(a);
-    });
-    if (duplicateSet.size > 0) {
-      return { isCorrect: false, score: 0 };
+    const normalizedCorrect = correctAnswers.map(a => a.toLowerCase().trim());
+    const normalizedUserFull = userAnswers.map(a => String(a ?? '').toLowerCase().trim());
+    const normalizedUser = normalizedUserFull.filter(a => a !== '');
+    const allowDisorder = question.allowDisorder ?? false;
+
+    if (allowDisorder) {
+      const duplicateSet = new Set<string>();
+      const seen = new Set<string>();
+      normalizedUser.forEach((a) => {
+        if (seen.has(a)) duplicateSet.add(a);
+        seen.add(a);
+      });
+      if (duplicateSet.size > 0) {
+        return { isCorrect: false, score: 0 };
+      }
+    } else {
+      const isPositionCorrect = normalizedUserFull.map(
+        (value, idx) => Boolean(value) && value === normalizedCorrect[idx]
+      );
+      const counts = new Map<string, number>();
+      normalizedUserFull.forEach((value, idx) => {
+        if (!value || isPositionCorrect[idx]) return;
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      });
+      const hasDuplicates = [...counts.values()].some((count) => count > 1);
+      if (hasDuplicates) {
+        return { isCorrect: false, score: 0 };
+      }
     }
     
     if (correctAnswers.length === 0) {
       return { isCorrect: false, score: 0 };
     }
-    
-    const normalizedCorrect = correctAnswers.map(a => a.toLowerCase().trim());
-    const normalizedUserFull = userAnswers.map(a => (a as string).toLowerCase().trim());
-    
-    const allowDisorder = question.allowDisorder ?? false;
     
     let correctCount = 0;
     

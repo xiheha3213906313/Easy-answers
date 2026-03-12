@@ -4,10 +4,160 @@ function normalize(text: string): string {
   return text.replace(/[\s\p{P}\p{S}]+/gu, '').trim().toLowerCase();
 }
 
-function buildUrl(baseUrl: string): string {
+function isZhipuConfig(baseUrl: string, model?: string): boolean {
+  const base = (baseUrl || '').toLowerCase();
+  const modelLower = (model || '').toLowerCase();
+  return base.includes('open.bigmodel.cn') || modelLower.startsWith('glm-') || modelLower.startsWith('glm_');
+}
+
+function buildUrl(baseUrl: string, model?: string): string {
   const clean = baseUrl.replace(/\/$/, '');
   if (clean.endsWith('/chat/completions')) return clean;
+  if (isZhipuConfig(clean, model)) {
+    if (clean.includes('/api/paas/v4')) {
+      return `${clean}/chat/completions`;
+    }
+    return `${clean}/api/paas/v4/chat/completions`;
+  }
   return `${clean}/chat/completions`;
+}
+
+function prepareRequestBody(
+  body: Record<string, unknown>,
+  aiConfig: AiGradingConfig,
+  options?: { mode?: 'default' | 'test' | 'json' | 'plain' }
+): { body: Record<string, unknown>; expectStream: boolean } {
+  if (!isZhipuConfig(aiConfig.baseUrl, aiConfig.model)) {
+    return { body, expectStream: false };
+  }
+  if (options?.mode === 'test') {
+    return {
+      body: {
+        ...body,
+        stream: false
+      },
+      expectStream: false
+    };
+  }
+  if (options?.mode === 'json' || options?.mode === 'plain') {
+    const extra: Record<string, unknown> =
+      options?.mode === 'json'
+        ? {
+            response_format: { type: 'json_object' },
+            thinking: { type: 'disabled' }
+          }
+        : {};
+    return {
+      body: {
+        ...body,
+        stream: false,
+        ...extra
+      },
+      expectStream: false
+    };
+  }
+  return {
+    body: {
+      ...body,
+      stream: true,
+      thinking: {
+        type: 'enabled'
+      }
+    },
+    expectStream: true
+  };
+}
+
+async function readStreamContent(res: Response): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.replace(/^data:\s*/, '');
+      if (data === '[DONE]') return content;
+      try {
+        const json = JSON.parse(data);
+        const delta =
+          json?.choices?.[0]?.delta?.content ??
+          json?.choices?.[0]?.message?.content ??
+          '';
+        if (delta) content += String(delta);
+      } catch {
+        continue;
+      }
+    }
+  }
+  return content;
+}
+
+async function readChatResponse(res: Response, expectStream: boolean): Promise<{ content: string; data?: unknown }> {
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream')) {
+    const content = await readStreamContent(res);
+    return { content };
+  }
+  if (expectStream) {
+    try {
+      const data: any = await res.json();
+      const raw = data?.choices?.[0]?.message?.content ?? '';
+      const content = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      return { content, data };
+    } catch {
+      const content = await readStreamContent(res);
+      return { content };
+    }
+  }
+  const data: any = await res.json();
+  const raw = data?.choices?.[0]?.message?.content ?? '';
+  const content = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  return { content, data };
+}
+
+function buildErrorMessage(params: {
+  url: string;
+  status: number;
+  statusText: string;
+  durationMs: number;
+  responseText: string;
+  model: string;
+  baseUrl: string;
+  requestId?: string | null;
+  retryAfter?: string | null;
+}): string {
+  const {
+    url,
+    status,
+    statusText,
+    durationMs,
+    responseText,
+    model,
+    baseUrl,
+    requestId,
+    retryAfter
+  } = params;
+  const trimmed = (responseText || '').trim();
+  const snippet = trimmed.length > 800 ? `${trimmed.slice(0, 800)}...` : trimmed;
+  const parts = [
+    `HTTP ${status} ${statusText}`.trim(),
+    `durationMs=${durationMs}`,
+    `model=${model || '(empty)'}`,
+    `baseUrl=${baseUrl || '(empty)'}`,
+    `url=${url}`
+  ];
+  if (requestId) parts.push(`requestId=${requestId}`);
+  if (retryAfter) parts.push(`retryAfter=${retryAfter}`);
+  if (snippet) parts.push(`response=${snippet}`);
+  return parts.join(' | ');
 }
 
 function extractJson(text: string): string {
@@ -15,15 +165,19 @@ function extractJson(text: string): string {
   return match ? match[0] : '';
 }
 
+function truncateText(text: string, maxLen = 800): string {
+  const trimmed = (text || '').trim();
+  if (trimmed.length <= maxLen) return trimmed;
+  return `${trimmed.slice(0, maxLen)}...`;
+}
+
 export async function testAiConnection(aiConfig: AiGradingConfig): Promise<void> {
-  const url = buildUrl(aiConfig.baseUrl);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify({
+  const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const prepared = prepareRequestBody(
+    {
       model: aiConfig.model,
       temperature: 0,
       max_tokens: 16,
@@ -37,15 +191,42 @@ export async function testAiConnection(aiConfig: AiGradingConfig): Promise<void>
           content: 'Reply with OK.'
         }
       ]
-    })
-  });
+    },
+    aiConfig,
+    { mode: 'test' }
+  );
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${aiConfig.apiKey}`
+    },
+    signal: controller.signal,
+    body: JSON.stringify(prepared.body)
+  }).finally(() => clearTimeout(timeoutId));
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    const durationMs = Date.now() - started;
+    throw new Error(
+      buildErrorMessage({
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        durationMs,
+        responseText: text,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
+        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+        retryAfter: res.headers.get('retry-after')
+      })
+    );
   }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content?.trim();
-  if (!content || !content.toUpperCase().includes('OK')) {
+  const { content } = await readChatResponse(res, prepared.expectStream);
+  const trimmed = content?.trim();
+  if (!trimmed) {
+    throw new Error('Invalid response');
+  }
+  if (!isZhipuConfig(aiConfig.baseUrl, aiConfig.model) && !trimmed.toUpperCase().includes('OK')) {
     throw new Error('Invalid response');
   }
 }
@@ -62,40 +243,56 @@ export async function gradeSubjectiveAnswer(params: {
     return { score: maxScore, isCorrect: true, similarity: 1 };
   }
 
-  const url = buildUrl(aiConfig.baseUrl);
+  const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
+  const started = Date.now();
+  const prepared = prepareRequestBody({
+    model: aiConfig.model,
+    temperature: aiConfig.temperature,
+    max_tokens: aiConfig.maxTokens,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a lenient grader. No markdown. No chain-of-thought. Judge by meaning and intent, not exact wording. Ignore punctuation, spacing, casing, full-width/half-width, and minor typos. Extra punctuation or filler words must not reduce the score. If all key points are present, give full score; otherwise give partial score proportionally. Respond with JSON only: {"score": number, "is_correct": boolean, "similarity": number}.'
+      },
+      {
+        role: 'user',
+        content: `Question reference answer:\n${correctAnswer}\n\nUser answer:\n${userAnswer}\n\nMax score: ${maxScore}\nReturn JSON only.`
+      }
+    ]
+  }, aiConfig, { mode: 'json' });
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${aiConfig.apiKey}`
     },
-    body: JSON.stringify({
-      model: aiConfig.model,
-      temperature: aiConfig.temperature,
-      max_tokens: aiConfig.maxTokens,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a lenient grader. No markdown. No chain-of-thought. Judge by meaning and intent, not exact wording. Ignore punctuation, spacing, casing, full-width/half-width, and minor typos. Extra punctuation or filler words must not reduce the score. If all key points are present, give full score; otherwise give partial score proportionally. Respond with JSON only: {"score": number, "is_correct": boolean, "similarity": number}.'
-        },
-        {
-          role: 'user',
-          content: `Question reference answer:\n${correctAnswer}\n\nUser answer:\n${userAnswer}\n\nMax score: ${maxScore}\nReturn JSON only.`
-        }
-      ]
-    })
+    body: JSON.stringify(prepared.body)
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    const durationMs = Date.now() - started;
+    throw new Error(
+      buildErrorMessage({
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        durationMs,
+        responseText: text,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
+        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+        retryAfter: res.headers.get('retry-after')
+      })
+    );
   }
 
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || '';
+  const { content } = await readChatResponse(res, prepared.expectStream);
   const jsonText = extractJson(content);
-  if (!jsonText) throw new Error('Invalid response');
+  if (!jsonText) {
+    throw new Error(`Invalid response | content=${truncateText(content)}`);
+  }
   const parsed = JSON.parse(jsonText);
   const score = Math.max(0, Math.min(maxScore, Number(parsed.score ?? 0)));
   const similarity = Math.max(0, Math.min(1, Number(parsed.similarity ?? (score / maxScore))));
@@ -118,40 +315,56 @@ export async function gradeFillBlankAnswer(params: {
     return { score: maxScore, isCorrect: true, similarity: 1 };
   }
 
-  const url = buildUrl(aiConfig.baseUrl);
+  const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
+  const started = Date.now();
+  const prepared = prepareRequestBody({
+    model: aiConfig.model,
+    temperature: aiConfig.temperature,
+    max_tokens: aiConfig.maxTokens,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a lenient grader for fill-in-the-blank. No markdown. No chain-of-thought. Judge by meaning and intent, not exact wording. Ignore punctuation, spacing, casing, full-width/half-width, and minor typos. Accept common synonyms/abbreviations if meaning matches. Extra punctuation must not reduce the score. Score proportionally by blanks. Return JSON only: {"score": number, "is_correct": boolean, "similarity": number, "per_blank": boolean[]}.'
+      },
+      {
+        role: 'user',
+        content: `Correct answers:\n${JSON.stringify(correctAnswers)}\n\nUser answers:\n${JSON.stringify(userAnswers)}\n\nAllow disorder: ${allowDisorder}\nMax score: ${maxScore}\nReturn JSON only. Include per_blank array aligned to user answers.`
+      }
+    ]
+  }, aiConfig, { mode: 'json' });
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${aiConfig.apiKey}`
     },
-    body: JSON.stringify({
-      model: aiConfig.model,
-      temperature: aiConfig.temperature,
-      max_tokens: aiConfig.maxTokens,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a lenient grader for fill-in-the-blank. No markdown. No chain-of-thought. Judge by meaning and intent, not exact wording. Ignore punctuation, spacing, casing, full-width/half-width, and minor typos. Accept common synonyms/abbreviations if meaning matches. Extra punctuation must not reduce the score. Score proportionally by blanks. Return JSON only: {"score": number, "is_correct": boolean, "similarity": number, "per_blank": boolean[]}.'
-        },
-        {
-          role: 'user',
-          content: `Correct answers:\n${JSON.stringify(correctAnswers)}\n\nUser answers:\n${JSON.stringify(userAnswers)}\n\nAllow disorder: ${allowDisorder}\nMax score: ${maxScore}\nReturn JSON only. Include per_blank array aligned to user answers.`
-        }
-      ]
-    })
+    body: JSON.stringify(prepared.body)
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    const durationMs = Date.now() - started;
+    throw new Error(
+      buildErrorMessage({
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        durationMs,
+        responseText: text,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
+        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+        retryAfter: res.headers.get('retry-after')
+      })
+    );
   }
 
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || '';
+  const { content } = await readChatResponse(res, prepared.expectStream);
   const jsonText = extractJson(content);
-  if (!jsonText) throw new Error('Invalid response');
+  if (!jsonText) {
+    throw new Error(`Invalid response | content=${truncateText(content)}`);
+  }
   const parsed = JSON.parse(jsonText);
   const score = Math.max(0, Math.min(maxScore, Number(parsed.score ?? 0)));
   const similarity = Math.max(0, Math.min(1, Number(parsed.similarity ?? (score / maxScore || 0))));
@@ -170,26 +383,21 @@ export async function generateAiExplanation(params: {
   aiConfig: AiGradingConfig;
 }): Promise<string> {
   const { question, correctAnswer, userAnswer, aiConfig } = params;
-  const url = buildUrl(aiConfig.baseUrl);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify({
-      model: aiConfig.model,
-      temperature: Math.max(0, Math.min(1, aiConfig.temperature ?? 0.6)),
-      max_tokens: Math.min(512, aiConfig.maxTokens || 512),
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a concise study coach. No markdown. No chain-of-thought. Output plain text only. Use multiple short lines. Keep tips concise and explain why the answer is correct. Limit within 120 Chinese characters.'
-        },
-        {
-          role: 'user',
-          content: `题目:
+  const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
+  const started = Date.now();
+  const prepared = prepareRequestBody({
+    model: aiConfig.model,
+    temperature: Math.max(0, Math.min(1, aiConfig.temperature ?? 0.6)),
+    max_tokens: Math.min(512, aiConfig.maxTokens || 512),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a concise study coach. No markdown. No chain-of-thought. Output plain text only. Use multiple short lines. Keep tips concise and explain why the answer is correct. Limit within 120 Chinese characters.'
+      },
+      {
+        role: 'user',
+        content: `题目:
 ${question}
 
 参考答案:
@@ -202,18 +410,38 @@ ${userAnswer || '（未作答）'}
 1) 答题技巧：简短精炼
 2) 解析：说明为什么答案正确
 3) 关键点：一句话总结`
-        }
-      ]
-    })
+      }
+    ]
+  }, aiConfig, { mode: 'plain' });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${aiConfig.apiKey}`
+    },
+    body: JSON.stringify(prepared.body)
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    const durationMs = Date.now() - started;
+    throw new Error(
+      buildErrorMessage({
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        durationMs,
+        responseText: text,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
+        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+        retryAfter: res.headers.get('retry-after')
+      })
+    );
   }
 
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error('Invalid response');
-  return content;
+  const { content } = await readChatResponse(res, prepared.expectStream);
+  const trimmed = content?.trim();
+  if (!trimmed) throw new Error('Invalid response');
+  return trimmed;
 }

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuestionBankStore } from '../store/questionBankStore';
 import { isBuiltInBank } from '../utils/builtInBanks';
+import { confirmDialog } from '../store/confirmStore';
 
 const BankList: React.FC = () => {
   const navigate = useNavigate();
@@ -27,10 +28,16 @@ const BankList: React.FC = () => {
     navigate(`/exam/${bankId}`);
   };
 
-  const handleDeleteBank = (e: React.MouseEvent, bankId: string) => {
+  const handleDeleteBank = async (e: React.MouseEvent, bankId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    if (confirm('确定要删除这个题库吗？')) {
+    const ok = await confirmDialog({
+      title: '删除题库',
+      message: '确定要删除这个题库吗？此操作不可恢复。',
+      confirmText: '删除',
+      cancelText: '取消'
+    });
+    if (ok) {
       deleteBank(bankId);
     }
   };

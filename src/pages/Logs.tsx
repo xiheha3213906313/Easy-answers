@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { useLogStore } from '../store/logStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { alertDialog } from '../store/confirmStore';
 
 const Logs: React.FC = () => {
   const { logs, clearLogs } = useLogStore();
@@ -13,9 +14,9 @@ const Logs: React.FC = () => {
       .join('\n\n');
     try {
       await navigator.clipboard.writeText(text || '无日志');
-      alert('已复制日志');
+      void alertDialog('已复制日志', { title: '复制成功', confirmText: '知道了' });
     } catch {
-      alert('复制失败，请手动选择');
+      void alertDialog('复制失败，请手动选择', { title: '复制失败', confirmText: '我知道了' });
     }
   };
 

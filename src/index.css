@@ -901,6 +901,48 @@ body {
     color: var(--text-muted);
   }
 
+  .confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(15, 23, 42, 0.35);
+    backdrop-filter: blur(3px);
+  }
+
+  .confirm-card {
+    width: 100%;
+    max-width: 360px;
+    border-radius: 1rem;
+    background: var(--app-surface-strong);
+    border: 1px solid var(--app-border);
+    box-shadow: var(--shadow);
+    padding: 1rem;
+  }
+
+  .confirm-title {
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    color: var(--text-primary);
+  }
+
+  .confirm-message {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1rem;
+  }
+
+
   .exam-page {
     background: linear-gradient(180deg, #eaf3ff 0%, #ffffff 35%);
     padding-bottom: 3rem;

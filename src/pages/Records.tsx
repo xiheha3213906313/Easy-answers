@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useRecordStore } from '../store/recordStore';
+import { confirmDialog } from '../store/confirmStore';
 
 const Records: React.FC = () => {
   const { records, deleteRecord, clearRecords } = useRecordStore();
@@ -43,8 +44,14 @@ const Records: React.FC = () => {
           </div>
           {records.length > 0 && (
             <button
-              onClick={() => {
-                if (confirm('确定要清空所有记录吗？')) {
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: '清空记录',
+                  message: '确定要清空所有记录吗？此操作不可恢复。',
+                  confirmText: '清空',
+                  cancelText: '取消'
+                });
+                if (ok) {
                   clearRecords();
                 }
               }}
@@ -92,8 +99,14 @@ const Records: React.FC = () => {
                       查看详情
                     </Link>
                     <button
-                      onClick={() => {
-                        if (confirm('确定要删除这条记录吗？')) {
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: '删除记录',
+                          message: '确定要删除这条记录吗？此操作不可恢复。',
+                          confirmText: '删除',
+                          cancelText: '取消'
+                        });
+                        if (ok) {
                           deleteRecord(record.id);
                         }
                       }}

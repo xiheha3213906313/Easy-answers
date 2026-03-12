@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useQuestionBankStore } from '../store/questionBankStore';
 import { Question, QuestionType, AnswerWithImages } from '../types';
 import { isBuiltInBank } from '../utils/builtInBanks';
+import { alertDialog, confirmDialog } from '../store/confirmStore';
 
 function isAnswerWithImages(answer: unknown): answer is AnswerWithImages {
   return typeof answer === 'object' && answer !== null && 'text' in answer;
@@ -92,7 +93,7 @@ const QuestionBankDetail: React.FC = () => {
 
   const handleSaveBank = () => {
     if (!bankForm.name.trim()) {
-      alert('请输入题库名称');
+      void alertDialog('请输入题库名称');
       return;
     }
     updateBank(bank.id, {
@@ -112,20 +113,20 @@ const QuestionBankDetail: React.FC = () => {
 
   const handleSaveQuestion = () => {
     if (!questionForm.content.trim()) {
-      alert('请输入题目内容');
+      void alertDialog('请输入题目内容');
       return;
     }
 
     if (questionForm.type === 'single-choice' || questionForm.type === 'multiple-choice') {
       const validOptions = questionForm.options.filter(o => o.content.trim());
       if (validOptions.length < 2) {
-        alert('选择题至少需要2个有效选项');
+        void alertDialog('选择题至少需要2个有效选项');
         return;
       }
     }
 
     if (!questionForm.correctAnswer || (Array.isArray(questionForm.correctAnswer) && questionForm.correctAnswer.length === 0)) {
-      alert('请设置正确答案');
+      void alertDialog('请设置正确答案');
       return;
     }
 
@@ -169,8 +170,14 @@ const QuestionBankDetail: React.FC = () => {
     setExpandedQuestions(prev => new Set(prev).add(question.id));
   };
 
-  const handleDeleteQuestion = (questionId: string) => {
-    if (confirm('确定要删除这道题目吗？')) {
+  const handleDeleteQuestion = async (questionId: string) => {
+    const ok = await confirmDialog({
+      title: '删除题目',
+      message: '确定要删除这道题目吗？此操作不可恢复。',
+      confirmText: '删除',
+      cancelText: '取消'
+    });
+    if (ok) {
       deleteQuestion(bank.id, questionId);
       if (editingQuestionId === questionId) {
         resetForm();
