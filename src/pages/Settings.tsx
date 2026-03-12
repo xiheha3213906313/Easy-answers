@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSettingsStore, ThemeMode } from '../store/settingsStore';
 import { testAiConnection } from '../utils/aiGrader';
@@ -19,12 +19,38 @@ const Settings: React.FC = () => {
     updateAiConfig
   } = useSettingsStore();
   const [aiTesting, setAiTesting] = useState(false);
+  const aiPanelRef = useRef<HTMLDivElement | null>(null);
+  const prevAiSmartEnabled = useRef(aiSmartEnabled);
+  const [temperatureInput, setTemperatureInput] = useState(String(aiConfig.temperature));
+  const [maxTokensInput, setMaxTokensInput] = useState(String(aiConfig.maxTokens));
 
   const themeOptions: { value: ThemeMode; label: string }[] = [
     { value: 'light', label: '亮色' },
     { value: 'dark', label: '暗色' },
     { value: 'system', label: '跟随系统' }
   ];
+
+  useEffect(() => {
+    const justEnabled = !prevAiSmartEnabled.current && aiSmartEnabled;
+    if (!justEnabled) {
+      prevAiSmartEnabled.current = aiSmartEnabled;
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      if (aiPanelRef.current) {
+        aiPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        window.scrollBy({ top: -56, behavior: 'smooth' });
+      } else {
+        window.scrollBy({ top: 260, behavior: 'smooth' });
+      }
+    });
+    prevAiSmartEnabled.current = aiSmartEnabled;
+  }, [aiSmartEnabled]);
+
+  useEffect(() => {
+    setTemperatureInput(String(aiConfig.temperature));
+    setMaxTokensInput(String(aiConfig.maxTokens));
+  }, [aiConfig.temperature, aiConfig.maxTokens]);
 
   return (
     <div className="page-container settings-page">
@@ -42,6 +68,10 @@ const Settings: React.FC = () => {
         <div className="settings-section">
           <div className="settings-title">主题模式</div>
           <div className="segmented-control">
+            <div
+              className="segment-indicator"
+              style={{ transform: `translateX(${themeOptions.findIndex((o) => o.value === themeMode) * 100}%)` }}
+            />
             {themeOptions.map((option) => (
               <button
                 key={option.value}
@@ -110,7 +140,7 @@ const Settings: React.FC = () => {
           </div>
 
           {aiSmartEnabled && (
-            <div className="settings-panel">
+            <div className="settings-panel" ref={aiPanelRef}>
               <div className="settings-row">
                 <div>
                   <div className="settings-title">AI 判题</div>
@@ -183,6 +213,7 @@ const Settings: React.FC = () => {
                   className="input-styled"
                   value={aiConfig.baseUrl}
                   onChange={(e) => updateAiConfig({ baseUrl: e.target.value })}
+                  placeholder="https://api.openai.com/v1"
                 />
               </div>
               <div className="settings-field">
@@ -192,6 +223,7 @@ const Settings: React.FC = () => {
                   className="input-styled"
                   value={aiConfig.model}
                   onChange={(e) => updateAiConfig({ model: e.target.value })}
+                  placeholder="gpt-4o-mini"
                 />
               </div>
               <div className="settings-grid">
@@ -200,11 +232,22 @@ const Settings: React.FC = () => {
                   <input
                     type="number"
                     className="input-styled"
-                    value={aiConfig.temperature}
-                    onChange={(e) => updateAiConfig({ temperature: Number(e.target.value) })}
+                    value={temperatureInput}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setTemperatureInput(next);
+                      if (next.trim() === '') return;
+                      updateAiConfig({ temperature: Number(next) });
+                    }}
+                    onBlur={() => {
+                      if (temperatureInput.trim() !== '') return;
+                      setTemperatureInput('0.6');
+                      updateAiConfig({ temperature: 0.6 });
+                    }}
                     min={0}
                     max={2}
                     step={0.1}
+                    placeholder="0.6"
                   />
                 </div>
                 <div className="settings-field">
@@ -212,11 +255,22 @@ const Settings: React.FC = () => {
                   <input
                     type="number"
                     className="input-styled"
-                    value={aiConfig.maxTokens}
-                    onChange={(e) => updateAiConfig({ maxTokens: Number(e.target.value) })}
+                    value={maxTokensInput}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setMaxTokensInput(next);
+                      if (next.trim() === '') return;
+                      updateAiConfig({ maxTokens: Number(next) });
+                    }}
+                    onBlur={() => {
+                      if (maxTokensInput.trim() !== '') return;
+                      setMaxTokensInput('512');
+                      updateAiConfig({ maxTokens: 512 });
+                    }}
                     min={16}
                     max={4096}
                     step={16}
+                    placeholder="512"
                   />
                 </div>
               </div>

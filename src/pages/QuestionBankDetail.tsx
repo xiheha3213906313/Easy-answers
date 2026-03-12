@@ -232,7 +232,7 @@ const QuestionBankDetail: React.FC = () => {
               <textarea
                 value={bankForm.description}
                 onChange={(e) => setBankForm(prev => ({ ...prev, description: e.target.value }))}
-                className="w-full text-gray-500 mt-1 border border-gray-200 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm sm:text-base"
+                className="input-styled mt-1 text-sm sm:text-base"
                 placeholder="题库描述（可选）"
                 rows={2}
               />

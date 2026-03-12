@@ -14,7 +14,9 @@ const Home: React.FC = () => {
 
   const [quote, setQuote] = useState<string | null>(null);
   const [quoteSize, setQuoteSize] = useState(0.85);
+  const [greetingSize, setGreetingSize] = useState(1.4);
   const quoteRef = useRef<HTMLDivElement | null>(null);
+  const greetingRef = useRef<HTMLDivElement | null>(null);
 
   const todayCount = useMemo(() => {
     const today = new Date();
@@ -81,6 +83,30 @@ const Home: React.FC = () => {
     requestAnimationFrame(fit);
   }, [quote]);
 
+  useEffect(() => {
+    if (!greetingRef.current) return;
+    const el = greetingRef.current;
+    let size = 1.4;
+    el.style.fontSize = `${size}rem`;
+    const minSize = 0.9;
+    const step = 0.05;
+    const fit = () => {
+      while (el.scrollWidth > el.clientWidth && size > minSize) {
+        size = Math.max(minSize, size - step);
+        el.style.fontSize = `${size}rem`;
+      }
+      setGreetingSize(size);
+    };
+    requestAnimationFrame(fit);
+    const handleResize = () => {
+      size = 1.4;
+      el.style.fontSize = `${size}rem`;
+      requestAnimationFrame(fit);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [greeting]);
+
   const continueTarget = useMemo(() => {
     if (!lastSession) return null;
     if (lastSession.bankId) {
@@ -92,13 +118,11 @@ const Home: React.FC = () => {
   return (
     <div className="page-container home-page">
       <div className="w-full max-w-4xl mx-auto box-border px-1 sm:px-0">
-        <div className="home-header">
-          <div className="home-title">智能刷题助手</div>
-        </div>
-
         <div className="home-greeting">
           <div>
-            <div className="home-hello">{greeting}</div>
+            <div className="home-hello" ref={greetingRef} style={{ fontSize: `${greetingSize}rem` }}>
+              {greeting}
+            </div>
             <div className="home-sub">今日目标：已学 {todayCount}/{DAILY_GOAL} 题</div>
             {quote && (
               <div className="home-quote" ref={quoteRef} style={{ fontSize: `${quoteSize}rem` }}>
@@ -170,7 +194,7 @@ const Home: React.FC = () => {
             </div>
           </div>
           <button
-            className="btn-primary"
+            className="btn-primary flex-shrink-0"
             onClick={() =>
               continueTarget
                 ? navigate(continueTarget.path)

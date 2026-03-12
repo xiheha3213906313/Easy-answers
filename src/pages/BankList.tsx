@@ -135,7 +135,7 @@ const BankList: React.FC = () => {
                     type="text"
                     value={newBankName}
                     onChange={(e) => setNewBankName(e.target.value)}
-                    className="w-full px-2 py-1 sm:px-2.5 sm:py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs sm:text-sm"
+                    className="input-styled text-xs sm:text-sm"
                     placeholder="请输入题库名称"
                   />
                 </div>
@@ -146,7 +146,7 @@ const BankList: React.FC = () => {
                   <textarea
                     value={newBankDesc}
                     onChange={(e) => setNewBankDesc(e.target.value)}
-                    className="w-full px-2 py-1 sm:px-2.5 sm:py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs sm:text-sm"
+                    className="input-styled text-xs sm:text-sm"
                     rows={2}
                     placeholder="请输入题库描述（可选）"
                   />

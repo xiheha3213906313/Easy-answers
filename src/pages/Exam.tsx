@@ -813,7 +813,7 @@ const Exam: React.FC = () => {
                       });
                     }}
                     disabled={isConfirmed}
-                    className={`input-styled py-3 ${isConfirmed ? 'bg-gray-100' : ''} ${
+                    className={`input-styled py-3 ${isConfirmed ? 'input-disabled' : ''} ${
                       isDuplicateValue((blankAnswers[idx] as string) || '')
                         ? 'input-error'
                         : realtimeCheckEnabled && touchedSet.has(idx) && !isConfirmed
@@ -885,7 +885,7 @@ const Exam: React.FC = () => {
                 setAnswer(question.id, e.target.value);
               }}
               disabled={isConfirmed}
-              className={`input-styled py-3 ${isConfirmed ? 'bg-gray-100' : ''}`}
+              className={`input-styled py-3 ${isConfirmed ? 'input-disabled' : ''}`}
               rows={6}
               placeholder="请输入答案"
             />

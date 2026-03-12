@@ -84,7 +84,7 @@ const AppShell: React.FC = () => {
 const App: React.FC = () => {
   const { loadBanks } = useQuestionBankStore();
   const { loadRecords } = useRecordStore();
-  const { themeMode } = useSettingsStore();
+  const { themeMode, showDebugButton } = useSettingsStore();
   const { loadStudy } = useStudyStore();
 
   useEffect(() => {
@@ -130,6 +130,11 @@ const App: React.FC = () => {
       return () => media.removeEventListener('change', handler);
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('debug-visible', showDebugButton);
+  }, [showDebugButton]);
 
   return (
     <HashRouter>

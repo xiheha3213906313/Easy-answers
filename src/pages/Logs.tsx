@@ -1,9 +1,11 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useLogStore } from '../store/logStore';
+import { useSettingsStore } from '../store/settingsStore';
 
 const Logs: React.FC = () => {
   const { logs, clearLogs } = useLogStore();
+  const { showDebugButton, setShowDebugButton } = useSettingsStore();
 
   const handleCopy = async () => {
     const text = logs
@@ -58,6 +60,23 @@ const Logs: React.FC = () => {
             ))}
           </div>
         )}
+
+        <div className="settings-section mt-3">
+          <div className="settings-row">
+            <div>
+              <div className="settings-title">调试按钮</div>
+              <div className="settings-sub">控制屏幕悬浮调试入口的显示</div>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={showDebugButton}
+                onChange={(e) => setShowDebugButton(e.target.checked)}
+              />
+              <span className="slider" />
+            </label>
+          </div>
+        </div>
       </div>
     </div>
   );

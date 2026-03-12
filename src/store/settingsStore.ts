@@ -17,19 +17,21 @@ interface SettingsState {
   aiGradingEnabled: boolean;
   aiExplainEnabled: boolean;
   realtimeCheckEnabled: boolean;
+  showDebugButton: boolean;
   aiConfig: AiGradingConfig;
   setThemeMode: (mode: ThemeMode) => void;
   setAiSmartEnabled: (enabled: boolean) => void;
   setAiGradingEnabled: (enabled: boolean) => void;
   setAiExplainEnabled: (enabled: boolean) => void;
   setRealtimeCheckEnabled: (enabled: boolean) => void;
+  setShowDebugButton: (enabled: boolean) => void;
   updateAiConfig: (updates: Partial<AiGradingConfig>) => void;
 }
 
 const defaultAiConfig: AiGradingConfig = {
   apiKey: '',
-  baseUrl: 'https://api.openai.com/v1',
-  model: 'gpt-4o-mini',
+  baseUrl: '',
+  model: '',
   temperature: 0.6,
   maxTokens: 512
 };
@@ -42,6 +44,7 @@ export const useSettingsStore = create<SettingsState>()(
       aiGradingEnabled: false,
       aiExplainEnabled: false,
       realtimeCheckEnabled: false,
+      showDebugButton: false,
       aiConfig: defaultAiConfig,
       setThemeMode: (mode) => set({ themeMode: mode }),
       setAiSmartEnabled: (enabled) => set((state) => ({
@@ -52,6 +55,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAiGradingEnabled: (enabled) => set({ aiGradingEnabled: enabled }),
       setAiExplainEnabled: (enabled) => set({ aiExplainEnabled: enabled }),
       setRealtimeCheckEnabled: (enabled) => set({ realtimeCheckEnabled: enabled }),
+      setShowDebugButton: (enabled) => set({ showDebugButton: enabled }),
       updateAiConfig: (updates) =>
         set((state) => ({
           aiConfig: {

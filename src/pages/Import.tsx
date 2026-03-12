@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuestionBankStore } from '../store/questionBankStore';
 import { validateJsonBank, convertJsonToBank, parseJsonFile } from '../utils/jsonImporter';
@@ -14,21 +14,11 @@ interface ParsedFile {
 const Import: React.FC = () => {
   const navigate = useNavigate();
   const { importBank } = useQuestionBankStore();
-  const [dragActive, setDragActive] = useState(false);
   const [parsedFiles, setParsedFiles] = useState<ParsedFile[]>([]);
   const [errors, setErrors] = useState<{ fileName: string; error: string }[]>([]);
   const [importing, setImporting] = useState(false);
   const [showFormat, setShowFormat] = useState(false);
-
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  }, []);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const processFiles = useCallback((files: FileList | File[]) => {
     const fileArray = Array.from(files);
@@ -87,21 +77,15 @@ const Import: React.FC = () => {
     });
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
-  }, [processFiles]);
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processFiles(e.target.files);
       e.target.value = '';
     }
+  };
+
+  const handleChooseFiles = () => {
+    fileInputRef.current?.click();
   };
 
   const toggleFileSelection = (index: number) => {
@@ -175,27 +159,20 @@ const Import: React.FC = () => {
         <h1 className="title-primary mb-3 sm:mb-4">导入题库</h1>
 
         <div className="card mb-3 sm:mb-4">
-          <div
-            className={`upload-zone ${dragActive ? 'upload-zone-active' : ''}`}
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-          >
+          <div className="upload-zone">
             <svg className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-400 mb-2 sm:mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
-            <p className="text-gray-600 mb-2 text-sm sm:text-base">拖拽 JSON 文件到此处，或</p>
-            <label className="cursor-pointer">
-              <span className="text-blue-500 hover:text-blue-600 text-sm sm:text-base">点击选择文件（支持多选）</span>
-              <input
-                type="file"
-                accept=".json"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-              />
-            </label>
+            <p className="text-gray-600 mb-2 text-sm sm:text-base">选择 JSON 文件导入（支持多选）</p>
+            <button className="btn-secondary" onClick={handleChooseFiles}>选择文件</button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              multiple
+              onChange={handleFileChange}
+              className="hidden"
+            />
           </div>
         </div>
 
