@@ -1,0 +1,8 @@
+node_modules/
+.git.bak/
+dist/
+src-tauri/target/
+android/.idea/
+android/.gradle/
+android/app/build/
+*.log
