@@ -118,7 +118,7 @@ const App: React.FC = () => {
 
       if (Capacitor.isNativePlatform()) {
         StatusBar.setBackgroundColor({ color: themeColor }).catch(() => undefined);
-        StatusBar.setStyle({ style: isDark ? StatusBarStyle.Light : StatusBarStyle.Dark }).catch(() => undefined);
+        StatusBar.setStyle({ style: isDark ? StatusBarStyle.Dark : StatusBarStyle.Light }).catch(() => undefined);
       }
     };
 

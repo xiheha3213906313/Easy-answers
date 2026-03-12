@@ -54,7 +54,7 @@ const Settings: React.FC = () => {
   }, [aiConfig.temperature, aiConfig.maxTokens]);
 
   return (
-    <div className="page-container settings-page">
+    <div className="page-container settings-page chapter-page">
       <div className="w-full max-w-4xl mx-auto box-border px-1 sm:px-0">
         <div className="chapter-header">
           <Link to="/" className="icon-button" aria-label="返回首页">

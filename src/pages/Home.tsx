@@ -13,6 +13,7 @@ const Home: React.FC = () => {
   const { favorites, wrongs, lastSession } = useStudyStore();
 
   const [quote, setQuote] = useState<string | null>(null);
+  const [showTodayGoal, setShowTodayGoal] = useState(true);
   const [quoteSize, setQuoteSize] = useState(0.85);
   const [greetingSize, setGreetingSize] = useState(1.4);
   const quoteRef = useRef<HTMLDivElement | null>(null);
@@ -58,11 +59,13 @@ const Home: React.FC = () => {
       '错题是进步的起点。',
       '行动是最好的计划。'
     ];
-    if (Math.random() < 0.3) {
+    if (Math.random() < 0.5) {
       const picked = quotes[Math.floor(Math.random() * quotes.length)];
       setQuote(picked);
+      setShowTodayGoal(false);
     } else {
       setQuote(null);
+      setShowTodayGoal(true);
     }
   }, []);
 
@@ -116,19 +119,29 @@ const Home: React.FC = () => {
   }, [lastSession]);
 
   return (
-    <div className="page-container home-page">
+    <div className="page-container home-page chapter-page">
       <div className="w-full max-w-4xl mx-auto box-border px-1 sm:px-0">
         <div className="home-greeting">
           <div>
             <div className="home-hello" ref={greetingRef} style={{ fontSize: `${greetingSize}rem` }}>
               {greeting}
             </div>
-            <div className="home-sub">今日目标：已学 {todayCount}/{DAILY_GOAL} 题</div>
-            {quote && (
-              <div className="home-quote" ref={quoteRef} style={{ fontSize: `${quoteSize}rem` }}>
-                {quote}
-              </div>
-            )}
+            <div className="home-subline">
+              {showTodayGoal && <div className="home-sub">今日目标：已学 {todayCount}/{DAILY_GOAL} 题</div>}
+              {quote && !showTodayGoal && (
+                <div
+                  className="home-quote"
+                  ref={quoteRef}
+                  style={{ fontSize: `${quoteSize}rem` }}
+                  onClick={() => {
+                    setQuote(null);
+                    setShowTodayGoal(true);
+                  }}
+                >
+                  {quote}
+                </div>
+              )}
+            </div>
           </div>
           <div className="home-progress-value">{progressPercent}%</div>
         </div>
