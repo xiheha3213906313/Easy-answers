@@ -14,6 +14,8 @@ import androidx.core.view.WindowInsetsCompat;
 
 import com.getcapacitor.BridgeActivity;
 
+import com.example.shuati.security.SecurityGuard;
+
 public class MainActivity extends BridgeActivity {
   private int lastInsetTop = -1;
   private int lastInsetRight = -1;
@@ -23,7 +25,11 @@ public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     registerPlugin(ConfigBridge.class);
+    if (SecurityGuard.shouldBlockBeforeCreate(this)) {
+      return;
+    }
     super.onCreate(savedInstanceState);
+    SecurityGuard.showDebugDialogIfNeeded(this);
 
     // Edge-to-edge: allow content to draw behind status/navigation bars.
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);

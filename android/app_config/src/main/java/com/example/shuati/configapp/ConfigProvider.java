@@ -9,6 +9,8 @@ import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
 
+import com.example.shuati.configapp.security.SecurityGuard;
+
 public class ConfigProvider extends ContentProvider {
   private static final String[] COLUMNS = new String[] {
       "enabled",
@@ -37,6 +39,10 @@ public class ConfigProvider extends ContentProvider {
     Context context = getContext();
     MatrixCursor cursor = new MatrixCursor(COLUMNS, 1);
     if (context == null) {
+      cursor.addRow(new Object[] {0, null, null, 0L});
+      return cursor;
+    }
+    if (SecurityGuard.isCompromised(context)) {
       cursor.addRow(new Object[] {0, null, null, 0L});
       return cursor;
     }
