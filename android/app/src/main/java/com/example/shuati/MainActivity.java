@@ -22,6 +22,7 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
+    registerPlugin(ConfigBridge.class);
     super.onCreate(savedInstanceState);
 
     // Edge-to-edge: allow content to draw behind status/navigation bars.

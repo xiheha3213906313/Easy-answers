@@ -13,7 +13,8 @@ const ConfirmHost: React.FC = () => {
     message,
     confirmText = '确定',
     cancelText = '取消',
-    showCancel = true
+    showCancel = true,
+    confirmTone = 'default'
   } = current.options;
 
   return (
@@ -27,7 +28,7 @@ const ConfirmHost: React.FC = () => {
               {cancelText}
             </button>
           )}
-          <button className="btn-primary" onClick={confirm}>
+          <button className={confirmTone === 'danger' ? 'btn-danger' : 'btn-primary'} onClick={confirm}>
             {confirmText}
           </button>
         </div>

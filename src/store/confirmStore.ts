@@ -6,6 +6,7 @@ export interface ConfirmOptions {
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
+  confirmTone?: 'default' | 'danger';
 }
 
 interface ConfirmState {

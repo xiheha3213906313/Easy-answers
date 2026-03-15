@@ -147,6 +147,18 @@ body {
     filter: brightness(0.96);
   }
 
+  .btn-danger {
+    @apply px-2.5 py-1 sm:px-3 sm:py-1.5 md:px-4 md:py-2 rounded-xl font-medium text-xs sm:text-sm
+           transition-all duration-300;
+    background: #ef4444;
+    color: white;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .btn-danger:hover {
+    filter: brightness(0.96);
+  }
+
   .btn-secondary {
     @apply px-2.5 py-1 sm:px-3 sm:py-1.5 md:px-4 md:py-2 rounded-xl font-medium text-xs sm:text-sm
            transition-all duration-300;

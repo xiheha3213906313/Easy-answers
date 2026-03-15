@@ -11,6 +11,8 @@ export interface AiGradingConfig {
   maxTokens: number;
 }
 
+export type AiConfigSource = 'none' | 'manual' | 'app2';
+
 interface SettingsState {
   themeMode: ThemeMode;
   aiSmartEnabled: boolean;
@@ -19,6 +21,9 @@ interface SettingsState {
   realtimeCheckEnabled: boolean;
   showDebugButton: boolean;
   aiConfig: AiGradingConfig;
+  aiConfigSource: AiConfigSource;
+  lastConfigHash: string;
+  pendingConfigHash: string;
   setThemeMode: (mode: ThemeMode) => void;
   setAiSmartEnabled: (enabled: boolean) => void;
   setAiGradingEnabled: (enabled: boolean) => void;
@@ -26,6 +31,10 @@ interface SettingsState {
   setRealtimeCheckEnabled: (enabled: boolean) => void;
   setShowDebugButton: (enabled: boolean) => void;
   updateAiConfig: (updates: Partial<AiGradingConfig>) => void;
+  setLastConfigHash: (hash: string) => void;
+  setPendingConfigHash: (hash: string) => void;
+  setAiConfigSource: (source: AiConfigSource) => void;
+  clearAiConfig: () => void;
 }
 
 const defaultAiConfig: AiGradingConfig = {
@@ -46,6 +55,9 @@ export const useSettingsStore = create<SettingsState>()(
       realtimeCheckEnabled: false,
       showDebugButton: false,
       aiConfig: defaultAiConfig,
+      aiConfigSource: 'none',
+      lastConfigHash: '',
+      pendingConfigHash: '',
       setThemeMode: (mode) => set({ themeMode: mode }),
       setAiSmartEnabled: (enabled) => set((state) => ({
         aiSmartEnabled: enabled,
@@ -62,7 +74,11 @@ export const useSettingsStore = create<SettingsState>()(
             ...state.aiConfig,
             ...updates
           }
-        }))
+        })),
+      setLastConfigHash: (hash) => set({ lastConfigHash: hash }),
+      setPendingConfigHash: (hash) => set({ pendingConfigHash: hash }),
+      setAiConfigSource: (source) => set({ aiConfigSource: source }),
+      clearAiConfig: () => set({ aiConfig: defaultAiConfig, aiConfigSource: 'none' })
     }),
     {
       name: 'app-settings',

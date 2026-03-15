@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSettingsStore, ThemeMode } from '../store/settingsStore';
 import { testAiConnection } from '../utils/aiGrader';
-import { alertDialog } from '../store/confirmStore';
+import { alertDialog, confirmDialog } from '../store/confirmStore';
+import { ConfigBridge } from '../native/configBridge';
+import { promptDialog } from '../store/promptStore';
+import { Capacitor } from '@capacitor/core';
 
 const Settings: React.FC = () => {
   const {
@@ -12,18 +15,39 @@ const Settings: React.FC = () => {
     aiExplainEnabled,
     realtimeCheckEnabled,
     aiConfig,
+    aiConfigSource,
+    pendingConfigHash,
     setThemeMode,
     setAiSmartEnabled,
     setAiGradingEnabled,
     setAiExplainEnabled,
     setRealtimeCheckEnabled,
-    updateAiConfig
+    updateAiConfig,
+    setLastConfigHash,
+    setPendingConfigHash,
+    setAiConfigSource,
+    clearAiConfig
   } = useSettingsStore();
   const [aiTesting, setAiTesting] = useState(false);
   const aiPanelRef = useRef<HTMLDivElement | null>(null);
   const prevAiSmartEnabled = useRef(aiSmartEnabled);
   const [temperatureInput, setTemperatureInput] = useState(String(aiConfig.temperature));
   const [maxTokensInput, setMaxTokensInput] = useState(String(aiConfig.maxTokens));
+  const isApp2Config = aiConfigSource === 'app2';
+  const handleApp2EditBlock = async () => {
+    const ok = await confirmDialog({
+      title: '正在使用分发配置',
+      message: '是否删除当前分发配置以允许手动编辑？',
+      confirmText: '删除',
+      cancelText: '取消',
+      confirmTone: 'danger'
+    });
+    if (!ok) return;
+    clearAiConfig();
+    setLastConfigHash('');
+    setPendingConfigHash('');
+    setAiConfigSource('none');
+  };
 
   const themeOptions: { value: ThemeMode; label: string }[] = [
     { value: 'light', label: '亮色' },
@@ -178,41 +202,110 @@ const Settings: React.FC = () => {
                 <label>API Key</label>
                 <input
                   type="password"
-                  className="input-styled"
+                  className={`input-styled ${isApp2Config ? 'input-disabled' : ''}`}
                   value={aiConfig.apiKey}
-                  onChange={(e) => updateAiConfig({ apiKey: e.target.value })}
+                  readOnly={isApp2Config}
+                  onClick={() => {
+                    if (isApp2Config) {
+                      void handleApp2EditBlock();
+                    }
+                  }}
+                  onChange={(e) => {
+                    updateAiConfig({ apiKey: e.target.value });
+                    if (aiConfigSource !== 'manual') {
+                      setAiConfigSource('manual');
+                    }
+                  }}
                   placeholder="sk-..."
                 />
               </div>
               <div className="settings-field">
-                <button
-                  className="btn-secondary"
-                  disabled={aiTesting}
-                  onClick={async () => {
-                    if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
-                      void alertDialog('请先填写 API Key / Base URL / 模型');
-                      return;
-                    }
-                    try {
-                      setAiTesting(true);
-                      await testAiConnection(aiConfig);
-                      void alertDialog('连接成功', { title: '连接成功', confirmText: '好的' });
-                    } catch (err) {
-                      void alertDialog('连接失败，请检查配置或网络', { title: '连接失败', confirmText: '我知道了' });
-                    } finally {
-                      setAiTesting(false);
-                    }
-                  }}
-                >
-                  {aiTesting ? '测试中...' : '测试连接'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    className="btn-secondary"
+                    disabled={aiTesting}
+                    onClick={async () => {
+                      if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+                        void alertDialog('请先填写 API Key / Base URL / 模型');
+                        return;
+                      }
+                      try {
+                        setAiTesting(true);
+                        await testAiConnection(aiConfig);
+                        void alertDialog('连接成功', { title: '连接成功', confirmText: '好的' });
+                      } catch (err) {
+                        void alertDialog('连接失败，请检查配置或网络', { title: '连接失败', confirmText: '我知道了' });
+                      } finally {
+                        setAiTesting(false);
+                      }
+                    }}
+                  >
+                    {aiTesting ? '测试中...' : '测试连接'}
+                  </button>
+                  {pendingConfigHash && Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigBridge') && (
+                    <button
+                      className="btn-primary"
+                      onClick={async () => {
+                        const pwd = await promptDialog({
+                          title: '获取配置',
+                          message: '请输入配置密码以解密 AI 配置',
+                          confirmText: '解密',
+                          cancelText: '取消',
+                          inputType: 'password',
+                          placeholder: '请输入密码'
+                        });
+                        if (!pwd) return;
+                        try {
+                          const result = await ConfigBridge.decryptConfig({ password: pwd });
+                          if (!result || result.error || !result.jsonString) {
+                            clearAiConfig();
+                            setLastConfigHash('');
+                            void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
+                            return;
+                          }
+                          const parsed = JSON.parse(result.jsonString) as {
+                            API_KEY?: string;
+                            BASE_URL?: string;
+                            MODEL_ID?: string;
+                          };
+                          if (!parsed.API_KEY || !parsed.BASE_URL || !parsed.MODEL_ID) {
+                            clearAiConfig();
+                            setLastConfigHash('');
+                            void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
+                            return;
+                          }
+                          updateAiConfig({
+                            apiKey: parsed.API_KEY,
+                            baseUrl: parsed.BASE_URL,
+                            model: parsed.MODEL_ID
+                          });
+                          setLastConfigHash(pendingConfigHash);
+                          setPendingConfigHash('');
+                          setAiConfigSource('app2');
+                        } catch (err) {
+                          clearAiConfig();
+                          setLastConfigHash('');
+                          void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
+                        }
+                      }}
+                    >
+                      获取配置
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="settings-field">
                 <label>Base URL</label>
                 <input
                   type="text"
-                  className="input-styled"
+                  className={`input-styled ${isApp2Config ? 'input-disabled' : ''}`}
                   value={aiConfig.baseUrl}
+                  readOnly={isApp2Config}
+                  onClick={() => {
+                    if (isApp2Config) {
+                      void handleApp2EditBlock();
+                    }
+                  }}
                   onChange={(e) => updateAiConfig({ baseUrl: e.target.value })}
                   placeholder="https://api.openai.com/v1"
                 />
@@ -221,8 +314,14 @@ const Settings: React.FC = () => {
                 <label>模型</label>
                 <input
                   type="text"
-                  className="input-styled"
+                  className={`input-styled ${isApp2Config ? 'input-disabled' : ''}`}
                   value={aiConfig.model}
+                  readOnly={isApp2Config}
+                  onClick={() => {
+                    if (isApp2Config) {
+                      void handleApp2EditBlock();
+                    }
+                  }}
                   onChange={(e) => updateAiConfig({ model: e.target.value })}
                   placeholder="gpt-4o-mini"
                 />

@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef } from 'react';
 import { HashRouter, Routes, Route, Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
@@ -8,6 +8,10 @@ import { useRecordStore } from './store/recordStore';
 import { useSettingsStore } from './store/settingsStore';
 import { useStudyStore } from './store/studyStore';
 import ConfirmHost from './components/ConfirmHost';
+import PromptHost from './components/PromptHost';
+import { ConfigBridge } from './native/configBridge';
+import { alertDialog } from './store/confirmStore';
+import { promptDialog } from './store/promptStore';
 
 const Home = lazy(() => import('./pages/Home'));
 const BankList = lazy(() => import('./pages/BankList'));
@@ -19,6 +23,7 @@ const Import = lazy(() => import('./pages/Import'));
 const Settings = lazy(() => import('./pages/Settings'));
 const ChapterSelect = lazy(() => import('./pages/ChapterSelect'));
 const Logs = lazy(() => import('./pages/Logs'));
+const Config = lazy(() => import('./pages/Config'));
 
 const PageLoader: React.FC = () => (
   <div className="page-loading-fallback">
@@ -85,8 +90,21 @@ const AppShell: React.FC = () => {
 const App: React.FC = () => {
   const { loadBanks } = useQuestionBankStore();
   const { loadRecords } = useRecordStore();
-  const { themeMode, showDebugButton } = useSettingsStore();
+  const {
+    themeMode,
+    showDebugButton,
+    aiSmartEnabled,
+    updateAiConfig,
+    lastConfigHash,
+    pendingConfigHash,
+    setLastConfigHash,
+    setPendingConfigHash,
+    aiConfigSource,
+    setAiConfigSource,
+    clearAiConfig
+  } = useSettingsStore();
   const { loadStudy } = useStudyStore();
+  const syncingConfig = useRef(false);
 
   useEffect(() => {
     const init = async () => {
@@ -137,6 +155,136 @@ const App: React.FC = () => {
     root.classList.toggle('debug-visible', showDebugButton);
   }, [showDebugButton]);
 
+  useEffect(() => {
+    if (!aiSmartEnabled) return;
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    if (syncingConfig.current) return;
+
+    syncingConfig.current = true;
+    const sync = async () => {
+      try {
+        const meta = await ConfigBridge.getConfigMeta();
+        if (!meta.enabled || !meta.configHash) {
+          if (aiConfigSource === 'app2') {
+            clearAiConfig();
+            setLastConfigHash('');
+            void alertDialog('你的分发配置可能已停止服务或已过期', {
+              title: 'AI分发配置已被删除',
+              confirmText: '我知道了'
+            });
+          }
+          setPendingConfigHash('');
+          return;
+        }
+
+        const hash = meta.configHash;
+        if (hash !== lastConfigHash && aiConfigSource === 'app2') {
+          clearAiConfig();
+          setLastConfigHash('');
+          void alertDialog('检测到分发配置变更', { title: '提示', confirmText: '我知道了' });
+        }
+
+        if (hash === pendingConfigHash) {
+          return;
+        }
+
+        if (aiConfigSource === 'manual') {
+          return;
+        }
+
+        let result = null as null | { jsonString?: string; needsPassword?: boolean; error?: string };
+
+        if (hash === lastConfigHash) {
+          result = await ConfigBridge.decryptConfig();
+          if (result?.needsPassword) {
+            const pwd = await promptDialog({
+              title: '配置解密',
+              message: '请输入配置密码以解密 AI 配置',
+              confirmText: '解密',
+              cancelText: '取消',
+              inputType: 'password',
+              placeholder: '请输入密码'
+            });
+            if (!pwd) {
+              setPendingConfigHash(hash);
+              return;
+            }
+            result = await ConfigBridge.decryptConfig({ password: pwd });
+          }
+        } else {
+          const pwd = await promptDialog({
+            title: '检测到新的AI配置',
+            message: '请输入密码进行解密',
+            confirmText: '解密',
+            cancelText: '取消',
+            inputType: 'password',
+            placeholder: '请输入密码'
+          });
+          if (!pwd) {
+            setPendingConfigHash(hash);
+            return;
+          }
+          result = await ConfigBridge.decryptConfig({ password: pwd });
+        }
+
+        if (!result) return;
+        if (result.error) {
+          clearAiConfig();
+          setLastConfigHash('');
+          setPendingConfigHash(hash);
+          void alertDialog(`解密失败：${result.error}`, { title: '解密失败', confirmText: '我知道了' });
+          return;
+        }
+        if (result.needsPassword || !result.jsonString) {
+          clearAiConfig();
+          setLastConfigHash('');
+          setPendingConfigHash(hash);
+          void alertDialog('需要密码才能解密配置', { title: '解密失败', confirmText: '我知道了' });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(result.jsonString) as { API_KEY?: string; BASE_URL?: string; MODEL_ID?: string };
+          if (!parsed.API_KEY || !parsed.BASE_URL || !parsed.MODEL_ID) {
+            clearAiConfig();
+            setLastConfigHash('');
+            setPendingConfigHash(hash);
+            void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
+            return;
+          }
+          updateAiConfig({
+            apiKey: parsed.API_KEY,
+            baseUrl: parsed.BASE_URL,
+            model: parsed.MODEL_ID
+          });
+          setLastConfigHash(hash);
+          setPendingConfigHash('');
+          setAiConfigSource('app2');
+        } catch (parseError) {
+          clearAiConfig();
+          setLastConfigHash('');
+          setPendingConfigHash(hash);
+          void alertDialog('配置内容解析失败', { title: '配置无效', confirmText: '我知道了' });
+        }
+      } catch (error) {
+        void alertDialog('读取配置失败，请稍后重试', { title: '配置读取失败', confirmText: '我知道了' });
+      }
+    };
+
+    sync().finally(() => {
+      syncingConfig.current = false;
+    });
+  }, [
+    aiSmartEnabled,
+    lastConfigHash,
+    pendingConfigHash,
+    aiConfigSource,
+    setLastConfigHash,
+    setPendingConfigHash,
+    setAiConfigSource,
+    updateAiConfig,
+    clearAiConfig
+  ]);
+
   return (
     <HashRouter>
       <Suspense fallback={<PageLoader />}>
@@ -152,11 +300,13 @@ const App: React.FC = () => {
         <Route path="/practice/:mode" element={<Exam />} />
         <Route path="/result/:id" element={<Result />} />
         <Route path="/records" element={<Records />} />
-        <Route path="/import" element={<Import />} />
-        <Route path="/logs" element={<Logs />} />
-      </Routes>
+          <Route path="/import" element={<Import />} />
+          <Route path="/config" element={<Config />} />
+          <Route path="/logs" element={<Logs />} />
+        </Routes>
       </Suspense>
       <ConfirmHost />
+      <PromptHost />
     </HashRouter>
   );
 };
