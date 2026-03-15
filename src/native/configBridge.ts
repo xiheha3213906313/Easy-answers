@@ -8,9 +8,37 @@ export interface ConfigMeta {
 
 export interface ConfigBridgePlugin {
   getConfigMeta(): Promise<ConfigMeta>;
-  decryptConfig(options?: { password?: string }): Promise<{
-    jsonString?: string;
+  decryptAndStoreConfig(options?: { password?: string }): Promise<{
+    baseUrl?: string;
+    model?: string;
+    maskedApiKey?: string;
     needsPassword?: boolean;
+    error?: string;
+  }>;
+  getStoredConfigMeta(): Promise<{
+    hasConfig: boolean;
+    baseUrl?: string;
+    model?: string;
+    maskedApiKey?: string;
+  }>;
+  storeDecryptedConfig(options: { jsonString: string }): Promise<{
+    baseUrl?: string;
+    model?: string;
+    maskedApiKey?: string;
+    error?: string;
+  }>;
+  clearDecryptedConfig(): Promise<void>;
+  aiProxyChat(options: {
+    url: string;
+    body: string;
+    headers?: Record<string, string>;
+  }): Promise<{
+    status: number;
+    statusText?: string;
+    contentType?: string;
+    requestId?: string | null;
+    retryAfter?: string | null;
+    bodyText?: string;
     error?: string;
   }>;
 }

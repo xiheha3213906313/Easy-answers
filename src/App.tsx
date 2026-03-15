@@ -101,6 +101,7 @@ const App: React.FC = () => {
     setPendingConfigHash,
     aiConfigSource,
     setAiConfigSource,
+    setAiNativeReady,
     clearAiConfig
   } = useSettingsStore();
   const { loadStudy } = useStudyStore();
@@ -156,6 +157,28 @@ const App: React.FC = () => {
   }, [showDebugButton]);
 
   useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    const syncStored = async () => {
+      try {
+        const meta = await ConfigBridge.getStoredConfigMeta();
+        if (meta.hasConfig) {
+          updateAiConfig({
+            apiKey: meta.maskedApiKey || '********',
+            baseUrl: meta.baseUrl || '',
+            model: meta.model || ''
+          });
+          setAiNativeReady(true);
+        } else {
+          setAiNativeReady(false);
+        }
+      } catch {
+        setAiNativeReady(false);
+      }
+    };
+    syncStored();
+  }, [setAiNativeReady, updateAiConfig]);
+
+  useEffect(() => {
     if (!aiSmartEnabled) return;
     if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
     if (syncingConfig.current) return;
@@ -168,6 +191,7 @@ const App: React.FC = () => {
           if (aiConfigSource === 'app2') {
             clearAiConfig();
             setLastConfigHash('');
+            await ConfigBridge.clearDecryptedConfig();
             void alertDialog('你的分发配置可能已停止服务或已过期', {
               title: 'AI分发配置已被删除',
               confirmText: '我知道了'
@@ -181,6 +205,7 @@ const App: React.FC = () => {
         if (hash !== lastConfigHash && aiConfigSource === 'app2') {
           clearAiConfig();
           setLastConfigHash('');
+          await ConfigBridge.clearDecryptedConfig();
           void alertDialog('检测到分发配置变更', { title: '提示', confirmText: '我知道了' });
         }
 
@@ -192,10 +217,10 @@ const App: React.FC = () => {
           return;
         }
 
-        let result = null as null | { jsonString?: string; needsPassword?: boolean; error?: string };
+        let result = null as null | { baseUrl?: string; model?: string; maskedApiKey?: string; needsPassword?: boolean; error?: string };
 
         if (hash === lastConfigHash) {
-          result = await ConfigBridge.decryptConfig();
+          result = await ConfigBridge.decryptAndStoreConfig();
           if (result?.needsPassword) {
             const pwd = await promptDialog({
               title: '配置解密',
@@ -209,7 +234,7 @@ const App: React.FC = () => {
               setPendingConfigHash(hash);
               return;
             }
-            result = await ConfigBridge.decryptConfig({ password: pwd });
+            result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
           }
         } else {
           const pwd = await promptDialog({
@@ -224,7 +249,7 @@ const App: React.FC = () => {
             setPendingConfigHash(hash);
             return;
           }
-          result = await ConfigBridge.decryptConfig({ password: pwd });
+          result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
         }
 
         if (!result) return;
@@ -235,36 +260,22 @@ const App: React.FC = () => {
           void alertDialog(`解密失败：${result.error}`, { title: '解密失败', confirmText: '我知道了' });
           return;
         }
-        if (result.needsPassword || !result.jsonString) {
+        if (result.needsPassword) {
           clearAiConfig();
           setLastConfigHash('');
           setPendingConfigHash(hash);
           void alertDialog('需要密码才能解密配置', { title: '解密失败', confirmText: '我知道了' });
           return;
         }
-        try {
-          const parsed = JSON.parse(result.jsonString) as { API_KEY?: string; BASE_URL?: string; MODEL_ID?: string };
-          if (!parsed.API_KEY || !parsed.BASE_URL || !parsed.MODEL_ID) {
-            clearAiConfig();
-            setLastConfigHash('');
-            setPendingConfigHash(hash);
-            void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
-            return;
-          }
-          updateAiConfig({
-            apiKey: parsed.API_KEY,
-            baseUrl: parsed.BASE_URL,
-            model: parsed.MODEL_ID
-          });
-          setLastConfigHash(hash);
-          setPendingConfigHash('');
-          setAiConfigSource('app2');
-        } catch (parseError) {
-          clearAiConfig();
-          setLastConfigHash('');
-          setPendingConfigHash(hash);
-          void alertDialog('配置内容解析失败', { title: '配置无效', confirmText: '我知道了' });
-        }
+        updateAiConfig({
+          apiKey: result.maskedApiKey || '********',
+          baseUrl: result.baseUrl || '',
+          model: result.model || ''
+        });
+        setAiNativeReady(true);
+        setLastConfigHash(hash);
+        setPendingConfigHash('');
+        setAiConfigSource('app2');
       } catch (error) {
         void alertDialog('读取配置失败，请稍后重试', { title: '配置读取失败', confirmText: '我知道了' });
       }
@@ -281,6 +292,7 @@ const App: React.FC = () => {
     setLastConfigHash,
     setPendingConfigHash,
     setAiConfigSource,
+    setAiNativeReady,
     updateAiConfig,
     clearAiConfig
   ]);

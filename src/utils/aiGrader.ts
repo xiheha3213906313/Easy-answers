@@ -1,4 +1,6 @@
 import { AiGradingConfig } from '../store/settingsStore';
+import { Capacitor } from '@capacitor/core';
+import { ConfigBridge } from '../native/configBridge';
 
 function normalize(text: string): string {
   return text.replace(/[\s\p{P}\p{S}]+/gu, '').trim().toLowerCase();
@@ -25,8 +27,11 @@ function buildUrl(baseUrl: string, model?: string): string {
 function prepareRequestBody(
   body: Record<string, unknown>,
   aiConfig: AiGradingConfig,
-  options?: { mode?: 'default' | 'test' | 'json' | 'plain' }
+  options?: { mode?: 'default' | 'test' | 'json' | 'plain'; forceNoStream?: boolean }
 ): { body: Record<string, unknown>; expectStream: boolean } {
+  if (options?.forceNoStream) {
+    return { body: { ...body, stream: false }, expectStream: false };
+  }
   if (!isZhipuConfig(aiConfig.baseUrl, aiConfig.model)) {
     return { body, expectStream: false };
   }
@@ -123,6 +128,13 @@ async function readChatResponse(res: Response, expectStream: boolean): Promise<{
   return { content, data };
 }
 
+function parseChatResponseText(responseText: string): { content: string; data?: unknown } {
+  const data: any = JSON.parse(responseText);
+  const raw = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.delta?.content ?? '';
+  const content = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  return { content, data };
+}
+
 function buildErrorMessage(params: {
   url: string;
   status: number;
@@ -171,7 +183,34 @@ function truncateText(text: string, maxLen = 800): string {
   return `${trimmed.slice(0, maxLen)}...`;
 }
 
-export async function testAiConnection(aiConfig: AiGradingConfig): Promise<void> {
+async function proxyRequest(params: {
+  url: string;
+  body: Record<string, unknown>;
+  aiConfig: AiGradingConfig;
+}): Promise<{ status: number; statusText: string; bodyText: string; contentType?: string; requestId?: string | null; retryAfter?: string | null }> {
+  const res = await ConfigBridge.aiProxyChat({
+    url: params.url,
+    body: JSON.stringify(params.body),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  return {
+    status: res.status,
+    statusText: res.statusText || '',
+    bodyText: res.bodyText || '',
+    contentType: res.contentType,
+    requestId: res.requestId ?? null,
+    retryAfter: res.retryAfter ?? null
+  };
+}
+
+function shouldUseNativeProxy(useNativeProxy?: boolean): boolean {
+  return Boolean(useNativeProxy && Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigBridge'));
+}
+
+export async function testAiConnection(
+  aiConfig: AiGradingConfig,
+  options?: { useNativeProxy?: boolean }
+): Promise<void> {
   const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
   const started = Date.now();
   const controller = new AbortController();
@@ -193,35 +232,57 @@ export async function testAiConnection(aiConfig: AiGradingConfig): Promise<void>
       ]
     },
     aiConfig,
-    { mode: 'test' }
+    { mode: 'test', forceNoStream: shouldUseNativeProxy(options?.useNativeProxy) }
   );
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    signal: controller.signal,
-    body: JSON.stringify(prepared.body)
-  }).finally(() => clearTimeout(timeoutId));
-  if (!res.ok) {
-    const text = await res.text();
-    const durationMs = Date.now() - started;
-    throw new Error(
-      buildErrorMessage({
-        url,
-        status: res.status,
-        statusText: res.statusText,
-        durationMs,
-        responseText: text,
-        model: aiConfig.model,
-        baseUrl: aiConfig.baseUrl,
-        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
-        retryAfter: res.headers.get('retry-after')
-      })
-    );
+  let content = '';
+  if (shouldUseNativeProxy(options?.useNativeProxy)) {
+    const proxyRes = await proxyRequest({ url, body: prepared.body, aiConfig }).finally(() => clearTimeout(timeoutId));
+    if (proxyRes.status < 200 || proxyRes.status >= 300) {
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: proxyRes.status,
+          statusText: proxyRes.statusText,
+          durationMs,
+          responseText: proxyRes.bodyText,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: proxyRes.requestId,
+          retryAfter: proxyRes.retryAfter
+        })
+      );
+    }
+    content = parseChatResponseText(proxyRes.bodyText).content;
+  } else {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      signal: controller.signal,
+      body: JSON.stringify(prepared.body)
+    }).finally(() => clearTimeout(timeoutId));
+    if (!res.ok) {
+      const text = await res.text();
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          durationMs,
+          responseText: text,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+          retryAfter: res.headers.get('retry-after')
+        })
+      );
+    }
+    content = (await readChatResponse(res, prepared.expectStream)).content;
   }
-  const { content } = await readChatResponse(res, prepared.expectStream);
   const trimmed = content?.trim();
   if (!trimmed) {
     throw new Error('Invalid response');
@@ -236,8 +297,9 @@ export async function gradeSubjectiveAnswer(params: {
   correctAnswer: string;
   maxScore: number;
   aiConfig: AiGradingConfig;
+  useNativeProxy?: boolean;
 }): Promise<{ score: number; isCorrect: boolean; similarity: number; perBlankCorrect?: boolean[] }> {
-  const { userAnswer, correctAnswer, maxScore, aiConfig } = params;
+  const { userAnswer, correctAnswer, maxScore, aiConfig, useNativeProxy } = params;
 
   if (normalize(userAnswer) === normalize(correctAnswer)) {
     return { score: maxScore, isCorrect: true, similarity: 1 };
@@ -260,35 +322,57 @@ export async function gradeSubjectiveAnswer(params: {
         content: `Question reference answer:\n${correctAnswer}\n\nUser answer:\n${userAnswer}\n\nMax score: ${maxScore}\nReturn JSON only.`
       }
     ]
-  }, aiConfig, { mode: 'json' });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify(prepared.body)
-  });
+  }, aiConfig, { mode: 'json', forceNoStream: shouldUseNativeProxy(useNativeProxy) });
+  let content = '';
+  if (shouldUseNativeProxy(useNativeProxy)) {
+    const proxyRes = await proxyRequest({ url, body: prepared.body, aiConfig });
+    if (proxyRes.status < 200 || proxyRes.status >= 300) {
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: proxyRes.status,
+          statusText: proxyRes.statusText,
+          durationMs,
+          responseText: proxyRes.bodyText,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: proxyRes.requestId,
+          retryAfter: proxyRes.retryAfter
+        })
+      );
+    }
+    content = parseChatResponseText(proxyRes.bodyText).content;
+  } else {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      body: JSON.stringify(prepared.body)
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    const durationMs = Date.now() - started;
-    throw new Error(
-      buildErrorMessage({
-        url,
-        status: res.status,
-        statusText: res.statusText,
-        durationMs,
-        responseText: text,
-        model: aiConfig.model,
-        baseUrl: aiConfig.baseUrl,
-        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
-        retryAfter: res.headers.get('retry-after')
-      })
-    );
+    if (!res.ok) {
+      const text = await res.text();
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          durationMs,
+          responseText: text,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+          retryAfter: res.headers.get('retry-after')
+        })
+      );
+    }
+
+    content = (await readChatResponse(res, prepared.expectStream)).content;
   }
-
-  const { content } = await readChatResponse(res, prepared.expectStream);
   const jsonText = extractJson(content);
   if (!jsonText) {
     throw new Error(`Invalid response | content=${truncateText(content)}`);
@@ -306,8 +390,9 @@ export async function gradeFillBlankAnswer(params: {
   allowDisorder: boolean;
   maxScore: number;
   aiConfig: AiGradingConfig;
+  useNativeProxy?: boolean;
 }): Promise<{ score: number; isCorrect: boolean; similarity: number; perBlankCorrect?: boolean[] }> {
-  const { userAnswers, correctAnswers, allowDisorder, maxScore, aiConfig } = params;
+  const { userAnswers, correctAnswers, allowDisorder, maxScore, aiConfig, useNativeProxy } = params;
   const normalizedUser = userAnswers.map((a) => normalize(a));
   const normalizedCorrect = correctAnswers.map((a) => normalize(a));
 
@@ -332,35 +417,57 @@ export async function gradeFillBlankAnswer(params: {
         content: `Correct answers:\n${JSON.stringify(correctAnswers)}\n\nUser answers:\n${JSON.stringify(userAnswers)}\n\nAllow disorder: ${allowDisorder}\nMax score: ${maxScore}\nReturn JSON only. Include per_blank array aligned to user answers.`
       }
     ]
-  }, aiConfig, { mode: 'json' });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify(prepared.body)
-  });
+  }, aiConfig, { mode: 'json', forceNoStream: shouldUseNativeProxy(useNativeProxy) });
+  let content = '';
+  if (shouldUseNativeProxy(useNativeProxy)) {
+    const proxyRes = await proxyRequest({ url, body: prepared.body, aiConfig });
+    if (proxyRes.status < 200 || proxyRes.status >= 300) {
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: proxyRes.status,
+          statusText: proxyRes.statusText,
+          durationMs,
+          responseText: proxyRes.bodyText,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: proxyRes.requestId,
+          retryAfter: proxyRes.retryAfter
+        })
+      );
+    }
+    content = parseChatResponseText(proxyRes.bodyText).content;
+  } else {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      body: JSON.stringify(prepared.body)
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    const durationMs = Date.now() - started;
-    throw new Error(
-      buildErrorMessage({
-        url,
-        status: res.status,
-        statusText: res.statusText,
-        durationMs,
-        responseText: text,
-        model: aiConfig.model,
-        baseUrl: aiConfig.baseUrl,
-        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
-        retryAfter: res.headers.get('retry-after')
-      })
-    );
+    if (!res.ok) {
+      const text = await res.text();
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          durationMs,
+          responseText: text,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+          retryAfter: res.headers.get('retry-after')
+        })
+      );
+    }
+
+    content = (await readChatResponse(res, prepared.expectStream)).content;
   }
-
-  const { content } = await readChatResponse(res, prepared.expectStream);
   const jsonText = extractJson(content);
   if (!jsonText) {
     throw new Error(`Invalid response | content=${truncateText(content)}`);
@@ -381,8 +488,9 @@ export async function generateAiExplanation(params: {
   correctAnswer: string;
   userAnswer?: string;
   aiConfig: AiGradingConfig;
+  useNativeProxy?: boolean;
 }): Promise<string> {
-  const { question, correctAnswer, userAnswer, aiConfig } = params;
+  const { question, correctAnswer, userAnswer, aiConfig, useNativeProxy } = params;
   const url = buildUrl(aiConfig.baseUrl, aiConfig.model);
   const started = Date.now();
   const prepared = prepareRequestBody({
@@ -412,35 +520,57 @@ ${userAnswer || '（未作答）'}
 3) 关键点：一句话总结`
       }
     ]
-  }, aiConfig, { mode: 'plain' });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify(prepared.body)
-  });
+  }, aiConfig, { mode: 'plain', forceNoStream: shouldUseNativeProxy(useNativeProxy) });
+  let content = '';
+  if (shouldUseNativeProxy(useNativeProxy)) {
+    const proxyRes = await proxyRequest({ url, body: prepared.body, aiConfig });
+    if (proxyRes.status < 200 || proxyRes.status >= 300) {
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: proxyRes.status,
+          statusText: proxyRes.statusText,
+          durationMs,
+          responseText: proxyRes.bodyText,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: proxyRes.requestId,
+          retryAfter: proxyRes.retryAfter
+        })
+      );
+    }
+    content = parseChatResponseText(proxyRes.bodyText).content;
+  } else {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      body: JSON.stringify(prepared.body)
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    const durationMs = Date.now() - started;
-    throw new Error(
-      buildErrorMessage({
-        url,
-        status: res.status,
-        statusText: res.statusText,
-        durationMs,
-        responseText: text,
-        model: aiConfig.model,
-        baseUrl: aiConfig.baseUrl,
-        requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
-        retryAfter: res.headers.get('retry-after')
-      })
-    );
+    if (!res.ok) {
+      const text = await res.text();
+      const durationMs = Date.now() - started;
+      throw new Error(
+        buildErrorMessage({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          durationMs,
+          responseText: text,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
+          requestId: res.headers.get('x-request-id') || res.headers.get('x-requestid'),
+          retryAfter: res.headers.get('retry-after')
+        })
+      );
+    }
+
+    content = (await readChatResponse(res, prepared.expectStream)).content;
   }
-
-  const { content } = await readChatResponse(res, prepared.expectStream);
   const trimmed = content?.trim();
   if (!trimmed) throw new Error('Invalid response');
   return trimmed;

@@ -22,6 +22,7 @@ interface SettingsState {
   showDebugButton: boolean;
   aiConfig: AiGradingConfig;
   aiConfigSource: AiConfigSource;
+  aiNativeReady: boolean;
   lastConfigHash: string;
   pendingConfigHash: string;
   setThemeMode: (mode: ThemeMode) => void;
@@ -34,6 +35,7 @@ interface SettingsState {
   setLastConfigHash: (hash: string) => void;
   setPendingConfigHash: (hash: string) => void;
   setAiConfigSource: (source: AiConfigSource) => void;
+  setAiNativeReady: (ready: boolean) => void;
   clearAiConfig: () => void;
 }
 
@@ -56,6 +58,7 @@ export const useSettingsStore = create<SettingsState>()(
       showDebugButton: false,
       aiConfig: defaultAiConfig,
       aiConfigSource: 'none',
+      aiNativeReady: false,
       lastConfigHash: '',
       pendingConfigHash: '',
       setThemeMode: (mode) => set({ themeMode: mode }),
@@ -78,11 +81,28 @@ export const useSettingsStore = create<SettingsState>()(
       setLastConfigHash: (hash) => set({ lastConfigHash: hash }),
       setPendingConfigHash: (hash) => set({ pendingConfigHash: hash }),
       setAiConfigSource: (source) => set({ aiConfigSource: source }),
-      clearAiConfig: () => set({ aiConfig: defaultAiConfig, aiConfigSource: 'none' })
+      setAiNativeReady: (ready) => set({ aiNativeReady: ready }),
+      clearAiConfig: () => set({ aiConfig: defaultAiConfig, aiConfigSource: 'none', aiNativeReady: false })
     }),
     {
       name: 'app-settings',
-      storage: createJSONStorage(() => localStorage)
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        themeMode: state.themeMode,
+        aiSmartEnabled: state.aiSmartEnabled,
+        aiGradingEnabled: state.aiGradingEnabled,
+        aiExplainEnabled: state.aiExplainEnabled,
+        realtimeCheckEnabled: state.realtimeCheckEnabled,
+        showDebugButton: state.showDebugButton,
+        aiConfig: {
+          ...state.aiConfig,
+          apiKey: ''
+        },
+        aiConfigSource: state.aiConfigSource,
+        aiNativeReady: state.aiNativeReady,
+        lastConfigHash: state.lastConfigHash,
+        pendingConfigHash: state.pendingConfigHash
+      })
     }
   )
 );

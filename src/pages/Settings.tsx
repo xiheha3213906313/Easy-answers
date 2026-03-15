@@ -16,6 +16,7 @@ const Settings: React.FC = () => {
     realtimeCheckEnabled,
     aiConfig,
     aiConfigSource,
+    aiNativeReady,
     pendingConfigHash,
     setThemeMode,
     setAiSmartEnabled,
@@ -26,6 +27,7 @@ const Settings: React.FC = () => {
     setLastConfigHash,
     setPendingConfigHash,
     setAiConfigSource,
+    setAiNativeReady,
     clearAiConfig
   } = useSettingsStore();
   const [aiTesting, setAiTesting] = useState(false);
@@ -34,6 +36,8 @@ const Settings: React.FC = () => {
   const [temperatureInput, setTemperatureInput] = useState(String(aiConfig.temperature));
   const [maxTokensInput, setMaxTokensInput] = useState(String(aiConfig.maxTokens));
   const isApp2Config = aiConfigSource === 'app2';
+  const nativeAvailable = Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigBridge');
+  const manualSyncTimer = useRef<number | null>(null);
   const handleApp2EditBlock = async () => {
     const ok = await confirmDialog({
       title: '正在使用分发配置',
@@ -43,11 +47,49 @@ const Settings: React.FC = () => {
       confirmTone: 'danger'
     });
     if (!ok) return;
+    if (nativeAvailable) {
+      await ConfigBridge.clearDecryptedConfig();
+    }
     clearAiConfig();
     setLastConfigHash('');
     setPendingConfigHash('');
     setAiConfigSource('none');
+    setAiNativeReady(false);
   };
+
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    if (aiConfigSource !== 'manual') return;
+    if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+      setAiNativeReady(false);
+      return;
+    }
+    if (manualSyncTimer.current) {
+      window.clearTimeout(manualSyncTimer.current);
+    }
+    manualSyncTimer.current = window.setTimeout(async () => {
+      try {
+        const payload = JSON.stringify({
+          API_KEY: aiConfig.apiKey,
+          BASE_URL: aiConfig.baseUrl,
+          MODEL_ID: aiConfig.model
+        });
+        const res = await ConfigBridge.storeDecryptedConfig({ jsonString: payload });
+        if (res.error) {
+          setAiNativeReady(false);
+          return;
+        }
+        setAiNativeReady(true);
+      } catch {
+        setAiNativeReady(false);
+      }
+    }, 400);
+    return () => {
+      if (manualSyncTimer.current) {
+        window.clearTimeout(manualSyncTimer.current);
+      }
+    };
+  }, [aiConfig.apiKey, aiConfig.baseUrl, aiConfig.model, aiConfigSource, nativeAvailable, setAiNativeReady]);
 
   const themeOptions: { value: ThemeMode; label: string }[] = [
     { value: 'light', label: '亮色' },
@@ -225,13 +267,14 @@ const Settings: React.FC = () => {
                     className="btn-secondary"
                     disabled={aiTesting}
                     onClick={async () => {
-                      if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+                      const ready = aiNativeReady || (!nativeAvailable && aiConfig.apiKey && aiConfig.baseUrl && aiConfig.model);
+                      if (!ready) {
                         void alertDialog('请先填写 API Key / Base URL / 模型');
                         return;
                       }
                       try {
                         setAiTesting(true);
-                        await testAiConnection(aiConfig);
+                        await testAiConnection(aiConfig, { useNativeProxy: aiNativeReady && nativeAvailable });
                         void alertDialog('连接成功', { title: '连接成功', confirmText: '好的' });
                       } catch (err) {
                         void alertDialog('连接失败，请检查配置或网络', { title: '连接失败', confirmText: '我知道了' });
@@ -242,7 +285,7 @@ const Settings: React.FC = () => {
                   >
                     {aiTesting ? '测试中...' : '测试连接'}
                   </button>
-                  {pendingConfigHash && Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigBridge') && (
+                  {pendingConfigHash && nativeAvailable && (
                     <button
                       className="btn-primary"
                       onClick={async () => {
@@ -256,29 +299,25 @@ const Settings: React.FC = () => {
                         });
                         if (!pwd) return;
                         try {
-                          const result = await ConfigBridge.decryptConfig({ password: pwd });
-                          if (!result || result.error || !result.jsonString) {
+                          const result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
+                          if (!result || result.error) {
                             clearAiConfig();
                             setLastConfigHash('');
                             void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
                             return;
                           }
-                          const parsed = JSON.parse(result.jsonString) as {
-                            API_KEY?: string;
-                            BASE_URL?: string;
-                            MODEL_ID?: string;
-                          };
-                          if (!parsed.API_KEY || !parsed.BASE_URL || !parsed.MODEL_ID) {
+                          if (!result.baseUrl || !result.model) {
                             clearAiConfig();
                             setLastConfigHash('');
                             void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
                             return;
                           }
                           updateAiConfig({
-                            apiKey: parsed.API_KEY,
-                            baseUrl: parsed.BASE_URL,
-                            model: parsed.MODEL_ID
+                            apiKey: result.maskedApiKey || '********',
+                            baseUrl: result.baseUrl,
+                            model: result.model
                           });
+                          setAiNativeReady(true);
                           setLastConfigHash(pendingConfigHash);
                           setPendingConfigHash('');
                           setAiConfigSource('app2');

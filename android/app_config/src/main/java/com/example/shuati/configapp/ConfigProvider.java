@@ -3,6 +3,8 @@ package com.example.shuati.configapp;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Binder;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
@@ -38,6 +40,10 @@ public class ConfigProvider extends ContentProvider {
       cursor.addRow(new Object[] {0, null, null, 0L});
       return cursor;
     }
+    if (!isCallerTrusted(context)) {
+      cursor.addRow(new Object[] {0, null, null, 0L});
+      return cursor;
+    }
 
     ConfigStorage.ConfigRecord record = ConfigStorage.read(context);
     if (!record.enabled) {
@@ -69,5 +75,18 @@ public class ConfigProvider extends ContentProvider {
   @Override
   public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
     throw new UnsupportedOperationException("Not supported");
+  }
+
+  private boolean isCallerTrusted(Context context) {
+    int callingUid = Binder.getCallingUid();
+    String[] packages = context.getPackageManager().getPackagesForUid(callingUid);
+    if (packages == null || packages.length == 0) return false;
+    for (String pkg : packages) {
+      if (context.getPackageManager().checkSignatures(context.getPackageName(), pkg)
+          == PackageManager.SIGNATURE_MATCH) {
+        return true;
+      }
+    }
+    return false;
   }
 }

@@ -138,7 +138,7 @@ const Exam: React.FC = () => {
     markWrong,
     saveLastSession
   } = useStudyStore();
-  const { aiSmartEnabled, aiGradingEnabled, aiExplainEnabled, aiConfig, realtimeCheckEnabled } = useSettingsStore();
+  const { aiSmartEnabled, aiGradingEnabled, aiExplainEnabled, aiConfig, aiNativeReady, realtimeCheckEnabled } = useSettingsStore();
   const { addLog } = useLogStore();
   const [fillTouched, setFillTouched] = useState<Record<string, Set<number>>>({});
   const [timeElapsed, setTimeElapsed] = useState(0);
@@ -378,7 +378,7 @@ const Exam: React.FC = () => {
       void alertDialog('请先开启 AI智能中的 AI解析');
       return;
     }
-    if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+    if (!aiNativeReady && (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model)) {
       void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
       return;
     }
@@ -407,7 +407,8 @@ const Exam: React.FC = () => {
         question: question.content,
         correctAnswer: getAnswerText(question.correctAnswer),
         userAnswer,
-        aiConfig
+        aiConfig,
+        useNativeProxy: aiNativeReady
       });
       addLog({
         level: 'info',
@@ -477,7 +478,7 @@ const Exam: React.FC = () => {
       setTimeout(() => handlePostConfirm(questionId), 0);
       return;
     }
-    if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+    if (!aiNativeReady && (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model)) {
       void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
       return;
     }
@@ -504,7 +505,8 @@ const Exam: React.FC = () => {
         correctAnswers,
         allowDisorder: question.allowDisorder ?? false,
         maxScore: question.score,
-        aiConfig
+        aiConfig,
+        useNativeProxy: aiNativeReady
       });
       const fallbackPerBlank = computePerBlankMatches(
         userAnswers,
@@ -555,7 +557,7 @@ const Exam: React.FC = () => {
     if (!question || typeof answer !== 'string') return;
 
     if (aiSmartEnabled && aiGradingEnabled) {
-      if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+      if (!aiNativeReady && (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model)) {
         void alertDialog('AI 判题配置不完整，请先填写 API Key / Base URL / 模型');
         return;
       }
@@ -570,7 +572,8 @@ const Exam: React.FC = () => {
           userAnswer: answer,
           correctAnswer: getAnswerText(question.correctAnswer),
           maxScore: question.score,
-          aiConfig
+          aiConfig,
+          useNativeProxy: aiNativeReady
         });
         addLog({
           level: 'info',
