@@ -36,7 +36,7 @@ const Logs: React.FC = () => {
           </div>
         </div>
 
-        <h1 className="title-primary mb-3">错误日志</h1>
+        <h1 className="title-primary mb-3">运行日志</h1>
 
         {logs.length === 0 ? (
           <div className="card text-center py-8">

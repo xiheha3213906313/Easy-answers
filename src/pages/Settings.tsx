@@ -272,7 +272,7 @@ const Settings: React.FC = () => {
           <div className="settings-row">
             <div>
               <div className="settings-title">题库管理</div>
-              <div className="settings-sub">维护题库与题目内容，支持新增、编辑与删除</div>
+              <div className="settings-sub">维护题库与题目内容</div>
             </div>
             <Link to="/banks" className="btn-secondary flex-shrink-0 whitespace-nowrap">
               进入
@@ -282,7 +282,7 @@ const Settings: React.FC = () => {
           <div className="settings-row">
             <div>
               <div className="settings-title">导入题库</div>
-              <div className="settings-sub">从 JSON 文件批量导入题库与题目数据</div>
+              <div className="settings-sub">从 JSON 文件导入题库</div>
             </div>
             <Link to="/import" className="btn-secondary flex-shrink-0 whitespace-nowrap">
               进入
@@ -294,7 +294,7 @@ const Settings: React.FC = () => {
           <div className="settings-row">
             <div>
               <div className="settings-title">实时判题</div>
-              <div className="settings-sub">填空题失焦后立即匹配并提示结果</div>
+              <div className="settings-sub">填空题输入答案后立刻进行判断</div>
             </div>
             <label className="switch">
               <input
@@ -310,7 +310,7 @@ const Settings: React.FC = () => {
           <div className="settings-row" ref={aiSmartToggleRef}>
             <div>
               <div className="settings-title">AI智能</div>
-              <div className="settings-sub">启用后可使用 AI 判题与解析功能</div>
+              <div className="settings-sub">开启后可使用 AI 判题与解析功能</div>
             </div>
             <label className="switch">
                 <input
@@ -328,7 +328,7 @@ const Settings: React.FC = () => {
               <div className="settings-row">
                 <div>
                   <div className="settings-title">AI 判题</div>
-                  <div className="settings-sub">基于 OpenAI 兼容接口进行智能判题</div>
+                  <div className="settings-sub">使用AI模型进行智能判题</div>
                 </div>
                 <label className="switch">
                   <input
@@ -344,7 +344,7 @@ const Settings: React.FC = () => {
               <div className="settings-row">
                 <div>
                   <div className="settings-title">AI 解析</div>
-                  <div className="settings-sub">开启后在答题页显示解析入口</div>
+                  <div className="settings-sub">使用AI模型进行答案解析</div>
                 </div>
                 <label className="switch">
                   <input
@@ -492,7 +492,7 @@ const Settings: React.FC = () => {
                 </div>
               </div>
               <div className="settings-hint">
-                调用方式采用 OpenAI 兼容 API：`POST /chat/completions`
+                采用 OpenAI 兼容 API：`POST /chat/completions`
               </div>
             </div>
           )}
