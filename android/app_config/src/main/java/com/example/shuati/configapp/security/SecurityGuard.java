@@ -21,6 +21,7 @@ import java.util.Set;
 import java.lang.reflect.Method;
 
 public final class SecurityGuard {
+  private static final String TAG = "ConfigSecurity";
   private static final String[] ROOT_PATHS = new String[] {
       "/system/bin/su",
       "/system/xbin/su",
@@ -163,7 +164,6 @@ public final class SecurityGuard {
   public static boolean isCompromised(Context context) {
     return isRooted()
         || isBootloaderUnlocked()
-        || isDebuggable(context)
         || isSelinuxPermissive()
         || hasSuspiciousPackages(context)
         || hasSuspiciousMounts()
@@ -208,9 +208,6 @@ public final class SecurityGuard {
       reasons.add("prop ro.boot.locked=0");
     }
 
-    if (isDebuggable(context)) {
-      reasons.add("flag debuggable");
-    }
 
     String selinux = getSystemProperty("ro.build.selinux");
     if ("0".equals(selinux)) {
@@ -255,6 +252,18 @@ public final class SecurityGuard {
       reasons.add("prop persist.sys.usb.config=" + adb);
     }
     return reasons;
+  }
+
+  public static String getDetectionReasonSummary(Context context) {
+    try {
+      List<String> reasons = getDetectionReasonsDetailed(context);
+      if (reasons.isEmpty()) {
+        return "";
+      }
+      return joinReasons(reasons);
+    } catch (Exception ignored) {
+      return "";
+    }
   }
 
   private static String joinReasons(List<String> reasons) {

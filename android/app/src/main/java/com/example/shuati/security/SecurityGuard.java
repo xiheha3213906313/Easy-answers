@@ -163,7 +163,6 @@ public final class SecurityGuard {
   public static boolean isCompromised(Context context) {
     return isRooted()
         || isBootloaderUnlocked()
-        || isDebuggable(context)
         || isSelinuxPermissive()
         || hasSuspiciousPackages(context)
         || hasSuspiciousMounts()
@@ -208,9 +207,6 @@ public final class SecurityGuard {
       reasons.add("prop ro.boot.locked=0");
     }
 
-    if (isDebuggable(context)) {
-      reasons.add("flag debuggable");
-    }
 
     String selinux = getSystemProperty("ro.build.selinux");
     if ("0".equals(selinux)) {
@@ -301,7 +297,7 @@ public final class SecurityGuard {
     return "0".equals(bootLocked);
   }
 
-  private static boolean isDebuggable(Context context) {
+  public static boolean isDebuggable(Context context) {
     try {
       ApplicationInfo info = context.getApplicationInfo();
       return (info.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;

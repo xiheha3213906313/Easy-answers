@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ConfigAdminBridge } from '../native/configBridge';
 import { alertDialog, confirmDialog } from '../store/confirmStore';
+import { useSettingsStore } from '../store/settingsStore';
 
 const Config: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -12,8 +13,13 @@ const Config: React.FC = () => {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [payloadInput, setPayloadInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const location = useLocation();
+  const hasNotifiedRef = useRef(false);
+  const firstPromptRef = useRef(false);
+  const { firstLaunchPrompted, setFirstLaunchPrompted } = useSettingsStore();
 
   const nativeAvailable = useMemo(() => Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigAdminBridge'), []);
+  const fromApp1 = useMemo(() => new URLSearchParams(location.search).get('from') === 'app1', [location.search]);
 
   const refreshState = useCallback(async () => {
     if (!nativeAvailable) return;
@@ -31,6 +37,45 @@ const Config: React.FC = () => {
     }
     refreshState().finally(() => setLoading(false));
   }, [nativeAvailable, refreshState]);
+
+  useEffect(() => {
+    if (!fromApp1 || loading || !nativeAvailable) return;
+    if (!enabled || hasNotifiedRef.current) return;
+    hasNotifiedRef.current = true;
+    void alertDialog('分发功能已启用，点击确定返回轻松答案', { title: '提示', confirmText: '确定' }).then(() => {
+      void ConfigAdminBridge.openMainApp();
+    });
+  }, [fromApp1, loading, enabled, nativeAvailable]);
+
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    if (fromApp1) {
+      if (!firstLaunchPrompted) {
+        setFirstLaunchPrompted(true);
+      }
+      return;
+    }
+    if (firstLaunchPrompted || firstPromptRef.current) return;
+    firstPromptRef.current = true;
+    const run = async () => {
+      try {
+        const res = await ConfigAdminBridge.isMainAppInstalled();
+        if (!res?.installed) return;
+        const ok = await confirmDialog({
+          title: '提示',
+          message: '检测到轻松答案，是否前往快速导入配置',
+          confirmText: '前往',
+          cancelText: '取消'
+        });
+        setFirstLaunchPrompted(true);
+        if (!ok) return;
+        await ConfigAdminBridge.openMainApp();
+      } catch {
+        // no-op
+      }
+    };
+    void run();
+  }, [firstLaunchPrompted, fromApp1, nativeAvailable, setFirstLaunchPrompted]);
 
   const handleToggle = async (next: boolean) => {
     if (!nativeAvailable) return;

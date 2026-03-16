@@ -10,8 +10,9 @@ import { useStudyStore } from './store/studyStore';
 import ConfirmHost from './components/ConfirmHost';
 import PromptHost from './components/PromptHost';
 import { ConfigBridge } from './native/configBridge';
-import { alertDialog } from './store/confirmStore';
+import { alertDialog, confirmDialog } from './store/confirmStore';
 import { promptDialog } from './store/promptStore';
+import { useLogStore } from './store/logStore';
 
 const Home = lazy(() => import('./pages/Home'));
 const BankList = lazy(() => import('./pages/BankList'));
@@ -35,6 +36,7 @@ const PageLoader: React.FC = () => (
 const AppShell: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { pendingSettingsRoute, setPendingSettingsRoute } = useSettingsStore();
   const tabs = useMemo(
     () => [
       { to: '/', label: '学习' },
@@ -56,6 +58,12 @@ const AppShell: React.FC = () => {
       handler.then((h) => h.remove());
     };
   }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!pendingSettingsRoute) return;
+    navigate('/settings');
+    setPendingSettingsRoute(false);
+  }, [navigate, pendingSettingsRoute, setPendingSettingsRoute]);
 
   return (
     <div className="app-shell">
@@ -90,10 +98,12 @@ const AppShell: React.FC = () => {
 const App: React.FC = () => {
   const { loadBanks } = useQuestionBankStore();
   const { loadRecords } = useRecordStore();
+  const { addLog } = useLogStore();
   const {
     themeMode,
     showDebugButton,
     aiSmartEnabled,
+    setAiSmartEnabled,
     updateAiConfig,
     lastConfigHash,
     pendingConfigHash,
@@ -102,10 +112,46 @@ const App: React.FC = () => {
     aiConfigSource,
     setAiConfigSource,
     setAiNativeReady,
-    clearAiConfig
+    clearAiConfig,
+    awaitingApp2Return,
+    setAwaitingApp2Return,
+    firstLaunchPrompted,
+    setFirstLaunchPrompted,
+    setPendingSettingsRoute,
+    setAiSecurityDisabled,
+    lastApp2SyncAt,
+    app2SyncMaxSeenAt,
+    app2SyncOverdue,
+    app2SyncRequestId,
+    setLastApp2SyncAt,
+    setApp2SyncMaxSeenAt,
+    setApp2SyncOverdue,
+    requestApp2Sync,
+    clearApp2SyncRequest,
+    setPendingAiPanelFocus
   } = useSettingsStore();
   const { loadStudy } = useStudyStore();
   const syncingConfig = useRef(false);
+  const app2ReturnPrompting = useRef(false);
+  const overduePrompting = useRef(false);
+
+  const notifyApp2SyncResult = (status: 'success' | 'nochange' | 'failed' | 'cancelled', detail?: string) => {
+    if (!app2SyncRequestId) return;
+    clearApp2SyncRequest();
+    let title = '同步完成';
+    let message = '同步成功';
+    if (status === 'nochange') {
+      title = '无需更新';
+      message = '配置已是最新';
+    } else if (status === 'failed') {
+      title = '同步失败';
+      message = detail ? `同步失败：${detail}` : '同步失败，请稍后重试';
+    } else if (status === 'cancelled') {
+      title = '已取消';
+      message = '已取消同步操作';
+    }
+    void alertDialog(message, { title, confirmText: '我知道了' });
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -179,6 +225,277 @@ const App: React.FC = () => {
   }, [setAiNativeReady, updateAiConfig]);
 
   useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    if (import.meta.env.DEV) {
+      setAiSecurityDisabled(false);
+      return;
+    }
+    const syncSecurity = async () => {
+      try {
+        const state = await ConfigBridge.getSecurityState();
+        const shouldDisable = Boolean(state?.compromised && !state?.debuggable);
+        setAiSecurityDisabled(shouldDisable);
+        if (shouldDisable) {
+          setAiSmartEnabled(false);
+        }
+      } catch {
+        setAiSecurityDisabled(false);
+      }
+    };
+    syncSecurity();
+  }, [setAiSecurityDisabled, setAiSmartEnabled]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const launch = await ConfigBridge.getLaunchSource();
+        if (cancelled) return;
+        if (launch?.fromApp2) {
+          setAiSmartEnabled(true);
+          setAwaitingApp2Return(true);
+          setPendingSettingsRoute(true);
+          setFirstLaunchPrompted(true);
+          return;
+        }
+        if (firstLaunchPrompted) return;
+        const res = await ConfigBridge.isConfigAppInstalled();
+        if (!res?.installed) return;
+        const ok = await confirmDialog({
+          title: '提示',
+          message: '检测到轻松秘钥存在，是否前往获取AI配置',
+          confirmText: '确定',
+          cancelText: '取消'
+        });
+        if (cancelled) return;
+        setFirstLaunchPrompted(true);
+        if (!ok) return;
+        setAiSmartEnabled(true);
+        setAwaitingApp2Return(true);
+        await ConfigBridge.openConfigApp();
+      } catch {
+        // no-op
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    firstLaunchPrompted,
+    setAiSmartEnabled,
+    setAwaitingApp2Return,
+    setFirstLaunchPrompted,
+    setPendingSettingsRoute
+  ]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    const runReturnFlow = () => {
+      if (!awaitingApp2Return || app2ReturnPrompting.current) return;
+      app2ReturnPrompting.current = true;
+      syncingConfig.current = true;
+      const run = async () => {
+        try {
+          const syncRequested = app2SyncRequestId > 0;
+          const meta = await ConfigBridge.getConfigMeta();
+          if (!meta.enabled || !meta.configHash) {
+            addLog({
+              level: 'warn',
+              message: `分发配置不可用（返回流程）| enabled=${String(meta.enabled)} | hash=${meta.configHash || 'empty'} | updatedAt=${meta.updatedAt ?? 'empty'}`,
+              source: 'config-sync'
+            });
+            setAwaitingApp2Return(false);
+            if (syncRequested) {
+              notifyApp2SyncResult('failed', '分发配置不可用');
+            }
+            return;
+          }
+          const hash = meta.configHash;
+          const sameHash = hash === lastConfigHash;
+          let result = null as null | { baseUrl?: string; model?: string; maskedApiKey?: string; needsPassword?: boolean; error?: string };
+          if (sameHash) {
+            result = await ConfigBridge.decryptAndStoreConfig();
+          }
+          if (!result || result.needsPassword) {
+            const pwd = await promptDialog({
+              title: '获取配置',
+              message: '请输入秘钥以解密 AI 配置',
+              confirmText: '解密',
+              cancelText: '取消',
+              inputType: 'password',
+              placeholder: '请输入秘钥'
+            });
+            if (!pwd) {
+              setPendingConfigHash(hash);
+              setAwaitingApp2Return(false);
+              if (syncRequested) {
+                notifyApp2SyncResult('cancelled');
+              }
+              return;
+            }
+            result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
+          }
+          if (!result || result.error) {
+            clearAiConfig();
+            setLastConfigHash('');
+            setPendingConfigHash(hash);
+            addLog({
+              level: 'warn',
+              message: `秘钥解密失败（返回流程）| hash=${hash} | error=${result?.error || 'unknown'}`,
+              source: 'config-sync'
+            });
+            void alertDialog('解密失败，请检查秘钥', { title: '解密失败', confirmText: '我知道了' });
+            setAwaitingApp2Return(false);
+            if (syncRequested) {
+              notifyApp2SyncResult('failed', '解密失败');
+            }
+            return;
+          }
+          if (!result.baseUrl || !result.model) {
+            clearAiConfig();
+            setLastConfigHash('');
+            setPendingConfigHash(hash);
+            addLog({
+              level: 'warn',
+              message: `分发配置无效（返回流程）| hash=${hash} | baseUrl=${result.baseUrl || 'empty'} | model=${result.model || 'empty'}`,
+              source: 'config-sync'
+            });
+            void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
+            setAwaitingApp2Return(false);
+            if (syncRequested) {
+              notifyApp2SyncResult('failed', '配置无效');
+            }
+            return;
+          }
+          updateAiConfig({
+            apiKey: result.maskedApiKey || '********',
+            baseUrl: result.baseUrl,
+            model: result.model
+          });
+          setAiNativeReady(true);
+          setLastConfigHash(hash);
+          setPendingConfigHash('');
+          setAiConfigSource('app2');
+          setPendingSettingsRoute(true);
+          setPendingAiPanelFocus(true);
+          const now = Date.now();
+          setLastApp2SyncAt(now);
+          setApp2SyncOverdue(false);
+          setApp2SyncMaxSeenAt(Math.max(now, app2SyncMaxSeenAt));
+          if (syncRequested) {
+            notifyApp2SyncResult(sameHash ? 'nochange' : 'success');
+          }
+          setAwaitingApp2Return(false);
+        } catch {
+          setAwaitingApp2Return(false);
+          if (app2SyncRequestId > 0) {
+            notifyApp2SyncResult('failed');
+          }
+        }
+      };
+      run().finally(() => {
+        app2ReturnPrompting.current = false;
+        syncingConfig.current = false;
+      });
+    };
+    const handler = CapApp.addListener('appStateChange', (state) => {
+      if (!state.isActive) return;
+      runReturnFlow();
+    });
+    const resumeHandler = CapApp.addListener('resume', () => {
+      runReturnFlow();
+    });
+    return () => {
+      handler.then((h) => h.remove());
+      resumeHandler.then((h) => h.remove());
+    };
+  }, [
+    awaitingApp2Return,
+    setAwaitingApp2Return,
+    setPendingConfigHash,
+    setLastConfigHash,
+    setAiConfigSource,
+    setAiNativeReady,
+    updateAiConfig,
+    clearAiConfig,
+    addLog,
+    app2SyncRequestId,
+    app2SyncMaxSeenAt,
+    setLastApp2SyncAt,
+    setApp2SyncOverdue,
+    setApp2SyncMaxSeenAt,
+    clearApp2SyncRequest,
+    setPendingAiPanelFocus,
+    setPendingSettingsRoute
+  ]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const checkOverdue = async () => {
+      if (aiConfigSource !== 'app2') {
+        if (app2SyncOverdue) {
+          setApp2SyncOverdue(false);
+        }
+        return;
+      }
+      const now = Date.now();
+      const maxSeen = Math.max(now, app2SyncMaxSeenAt || 0);
+      if (maxSeen !== app2SyncMaxSeenAt) {
+        setApp2SyncMaxSeenAt(maxSeen);
+      }
+      if (!lastApp2SyncAt) return;
+      const overdue = maxSeen - lastApp2SyncAt > SEVEN_DAYS_MS;
+      if (!overdue) {
+        if (app2SyncOverdue) setApp2SyncOverdue(false);
+        return;
+      }
+      if (!app2SyncOverdue) {
+        setApp2SyncOverdue(true);
+      }
+      if (overduePrompting.current) return;
+      overduePrompting.current = true;
+      await alertDialog('已超过7天未与配置应用同步，系统将强制拉起同步。', {
+        title: '需要同步',
+        confirmText: '立即同步'
+      });
+      requestApp2Sync('forced');
+      setAwaitingApp2Return(true);
+      try {
+        await ConfigBridge.openConfigApp();
+      } catch {
+        // no-op
+      } finally {
+        overduePrompting.current = false;
+      }
+    };
+
+    checkOverdue();
+    const handler = CapApp.addListener('appStateChange', (state) => {
+      if (!state.isActive) return;
+      checkOverdue();
+    });
+    const resumeHandler = CapApp.addListener('resume', () => {
+      checkOverdue();
+    });
+    return () => {
+      handler.then((h) => h.remove());
+      resumeHandler.then((h) => h.remove());
+    };
+  }, [
+    aiConfigSource,
+    app2SyncOverdue,
+    app2SyncMaxSeenAt,
+    lastApp2SyncAt,
+    setApp2SyncMaxSeenAt,
+    setApp2SyncOverdue,
+    setAwaitingApp2Return,
+    requestApp2Sync
+  ]);
+
+  useEffect(() => {
     if (!aiSmartEnabled) return;
     if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('ConfigBridge')) return;
     if (syncingConfig.current) return;
@@ -189,6 +506,53 @@ const App: React.FC = () => {
         const meta = await ConfigBridge.getConfigMeta();
         if (!meta.enabled || !meta.configHash) {
           if (aiConfigSource === 'app2') {
+            let diag = null as null | {
+              reason?: string;
+              details?: string;
+              enabled?: boolean;
+              configHash?: string;
+              updatedAt?: number;
+              callerUid?: number;
+              callerPackages?: string;
+              providerFound?: boolean;
+              providerPackage?: string;
+              appInstalled?: boolean;
+            };
+            try {
+              diag = await ConfigBridge.getConfigDiagnostics();
+            } catch {
+              diag = null;
+            }
+
+            const providerUnavailable =
+              diag?.reason === 'no_cursor' && diag?.providerFound && diag?.appInstalled;
+
+            if (providerUnavailable) {
+              // App2 provider is temporarily unavailable (e.g. app was force-stopped).
+              // Keep existing config and wait for app2 to come back.
+              return;
+            }
+
+            addLog({
+              level: 'warn',
+              message: `分发配置不可用（自动同步）| enabled=${String(meta.enabled)} | hash=${meta.configHash || 'empty'} | updatedAt=${meta.updatedAt ?? 'empty'} | lastHash=${lastConfigHash || 'empty'} | pendingHash=${pendingConfigHash || 'empty'}`,
+              source: 'config-sync'
+            });
+
+            if (diag) {
+              addLog({
+                level: 'warn',
+                message: `分发配置诊断 | reason=${diag.reason || 'empty'} | details=${diag.details || 'empty'} | enabled=${String(diag.enabled)} | hash=${diag.configHash || 'empty'} | updatedAt=${diag.updatedAt ?? 'empty'} | callerUid=${diag.callerUid ?? 'empty'} | callerPackages=${diag.callerPackages || 'empty'} | providerFound=${String(diag.providerFound)} | providerPackage=${diag.providerPackage || 'empty'} | appInstalled=${String(diag.appInstalled)}`,
+                source: 'config-sync'
+              });
+            } else {
+              addLog({
+                level: 'warn',
+                message: '分发配置诊断获取失败',
+                source: 'config-sync'
+              });
+            }
+
             clearAiConfig();
             setLastConfigHash('');
             await ConfigBridge.clearDecryptedConfig();
@@ -206,6 +570,11 @@ const App: React.FC = () => {
           clearAiConfig();
           setLastConfigHash('');
           await ConfigBridge.clearDecryptedConfig();
+          addLog({
+            level: 'info',
+            message: `分发配置变更 | newHash=${hash} | lastHash=${lastConfigHash || 'empty'}`,
+            source: 'config-sync'
+          });
           void alertDialog('检测到分发配置变更', { title: '提示', confirmText: '我知道了' });
         }
 
@@ -257,6 +626,11 @@ const App: React.FC = () => {
           clearAiConfig();
           setLastConfigHash('');
           setPendingConfigHash(hash);
+          addLog({
+            level: 'warn',
+            message: `秘钥解密失败（自动同步）| hash=${hash} | error=${result.error}`,
+            source: 'config-sync'
+          });
           void alertDialog(`解密失败：${result.error}`, { title: '解密失败', confirmText: '我知道了' });
           return;
         }
@@ -264,6 +638,11 @@ const App: React.FC = () => {
           clearAiConfig();
           setLastConfigHash('');
           setPendingConfigHash(hash);
+          addLog({
+            level: 'warn',
+            message: `秘钥缺失或已过期（自动同步）| hash=${hash}`,
+            source: 'config-sync'
+          });
           void alertDialog('需要密码才能解密配置', { title: '解密失败', confirmText: '我知道了' });
           return;
         }
@@ -276,6 +655,16 @@ const App: React.FC = () => {
         setLastConfigHash(hash);
         setPendingConfigHash('');
         setAiConfigSource('app2');
+        setPendingSettingsRoute(true);
+        setPendingAiPanelFocus(true);
+        const now = Date.now();
+        setLastApp2SyncAt(now);
+        setApp2SyncOverdue(false);
+        setApp2SyncMaxSeenAt(Math.max(now, app2SyncMaxSeenAt));
+        if (app2SyncRequestId > 0) {
+          const sameHash = hash === lastConfigHash;
+          notifyApp2SyncResult(sameHash ? 'nochange' : 'success');
+        }
       } catch (error) {
         void alertDialog('读取配置失败，请稍后重试', { title: '配置读取失败', confirmText: '我知道了' });
       }
@@ -294,7 +683,14 @@ const App: React.FC = () => {
     setAiConfigSource,
     setAiNativeReady,
     updateAiConfig,
-    clearAiConfig
+    clearAiConfig,
+    addLog,
+    app2SyncRequestId,
+    app2SyncMaxSeenAt,
+    setLastApp2SyncAt,
+    setApp2SyncOverdue,
+    setApp2SyncMaxSeenAt,
+    clearApp2SyncRequest
   ]);
 
   return (

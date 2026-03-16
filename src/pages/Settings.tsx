@@ -14,10 +14,10 @@ const Settings: React.FC = () => {
     aiGradingEnabled,
     aiExplainEnabled,
     realtimeCheckEnabled,
+    aiSecurityDisabled,
     aiConfig,
     aiConfigSource,
     aiNativeReady,
-    pendingConfigHash,
     setThemeMode,
     setAiSmartEnabled,
     setAiGradingEnabled,
@@ -26,18 +26,37 @@ const Settings: React.FC = () => {
     updateAiConfig,
     setLastConfigHash,
     setPendingConfigHash,
+    setAwaitingApp2Return,
     setAiConfigSource,
     setAiNativeReady,
-    clearAiConfig
+    clearAiConfig,
+    setLastApp2SyncAt,
+    setApp2SyncOverdue,
+    setApp2SyncMaxSeenAt,
+    requestApp2Sync,
+    clearApp2SyncRequest,
+    pendingAiPanelFocus,
+    setPendingAiPanelFocus,
+    app2SyncMaxSeenAt
   } = useSettingsStore();
   const [aiTesting, setAiTesting] = useState(false);
+  const [configFetching, setConfigFetching] = useState(false);
   const aiPanelRef = useRef<HTMLDivElement | null>(null);
+  const aiSmartToggleRef = useRef<HTMLDivElement | null>(null);
   const prevAiSmartEnabled = useRef(aiSmartEnabled);
   const [temperatureInput, setTemperatureInput] = useState(String(aiConfig.temperature));
   const [maxTokensInput, setMaxTokensInput] = useState(String(aiConfig.maxTokens));
   const isApp2Config = aiConfigSource === 'app2';
   const nativeAvailable = Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('ConfigBridge');
   const manualSyncTimer = useRef<number | null>(null);
+
+  const scrollToAiSmartToggle = () => {
+    const target = aiSmartToggleRef.current ?? aiPanelRef.current;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const top = Math.max(0, window.scrollY + rect.top - 100);
+    window.scrollTo({ top, behavior: 'smooth' });
+  };
   const handleApp2EditBlock = async () => {
     const ok = await confirmDialog({
       title: '正在使用分发配置',
@@ -55,6 +74,100 @@ const Settings: React.FC = () => {
     setPendingConfigHash('');
     setAiConfigSource('none');
     setAiNativeReady(false);
+  };
+
+  const tryOpenConfigApp = async () => {
+    if (!nativeAvailable) return;
+    try {
+      const res = await ConfigBridge.openConfigApp();
+      if (res?.opened) {
+        setAwaitingApp2Return(true);
+        return true;
+      }
+      return false;
+    } catch {
+      // no-op: reserved for future
+      return false;
+    }
+  };
+
+  const handleSyncConfig = async () => {
+    if (!nativeAvailable || configFetching) return;
+    setConfigFetching(true);
+    try {
+      requestApp2Sync('manual');
+      const opened = await tryOpenConfigApp();
+      if (!opened) {
+        clearApp2SyncRequest();
+        void alertDialog('无法打开配置应用，请确认已安装并允许启动', { title: '同步失败', confirmText: '我知道了' });
+      }
+    } finally {
+      setConfigFetching(false);
+    }
+  };
+
+  const handleFetchConfig = async () => {
+    if (!nativeAvailable || configFetching) return;
+    setConfigFetching(true);
+    try {
+      const meta = await ConfigBridge.getConfigMeta();
+      if (!meta.enabled || !meta.configHash) {
+        await tryOpenConfigApp();
+        return;
+      }
+
+      const hash = meta.configHash;
+      let result = await ConfigBridge.decryptAndStoreConfig();
+      if (result?.needsPassword) {
+        const pwd = await promptDialog({
+          title: '获取配置',
+          message: '请输入配置密码以解密 AI 配置',
+          confirmText: '解密',
+          cancelText: '取消',
+          inputType: 'password',
+          placeholder: '请输入密码'
+        });
+        if (!pwd) {
+          setPendingConfigHash(hash);
+          return;
+        }
+        result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
+      }
+
+      if (!result || result.error) {
+        clearAiConfig();
+        setLastConfigHash('');
+        setPendingConfigHash(hash);
+        void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
+        return;
+      }
+      if (!result.baseUrl || !result.model) {
+        clearAiConfig();
+        setLastConfigHash('');
+        setPendingConfigHash(hash);
+        void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
+        return;
+      }
+
+      updateAiConfig({
+        apiKey: result.maskedApiKey || '********',
+        baseUrl: result.baseUrl,
+        model: result.model
+      });
+      setAiNativeReady(true);
+      setLastConfigHash(hash);
+      setPendingConfigHash('');
+      setAiConfigSource('app2');
+      setPendingAiPanelFocus(true);
+      const now = Date.now();
+      setLastApp2SyncAt(now);
+      setApp2SyncOverdue(false);
+      setApp2SyncMaxSeenAt(Math.max(now, app2SyncMaxSeenAt || 0));
+    } catch {
+      await tryOpenConfigApp();
+    } finally {
+      setConfigFetching(false);
+    }
   };
 
   useEffect(() => {
@@ -104,15 +217,18 @@ const Settings: React.FC = () => {
       return;
     }
     window.requestAnimationFrame(() => {
-      if (aiPanelRef.current) {
-        aiPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        window.scrollBy({ top: -56, behavior: 'smooth' });
-      } else {
-        window.scrollBy({ top: 260, behavior: 'smooth' });
-      }
+      scrollToAiSmartToggle();
     });
     prevAiSmartEnabled.current = aiSmartEnabled;
   }, [aiSmartEnabled]);
+
+  useEffect(() => {
+    if (!pendingAiPanelFocus) return;
+    window.requestAnimationFrame(() => {
+      scrollToAiSmartToggle();
+      setPendingAiPanelFocus(false);
+    });
+  }, [pendingAiPanelFocus, setPendingAiPanelFocus]);
 
   useEffect(() => {
     setTemperatureInput(String(aiConfig.temperature));
@@ -191,17 +307,18 @@ const Settings: React.FC = () => {
           </div>
 
           <div className="settings-divider" />
-          <div className="settings-row">
+          <div className="settings-row" ref={aiSmartToggleRef}>
             <div>
               <div className="settings-title">AI智能</div>
               <div className="settings-sub">启用后可使用 AI 判题与解析功能</div>
             </div>
             <label className="switch">
-              <input
-                type="checkbox"
-                checked={aiSmartEnabled}
-                onChange={(e) => setAiSmartEnabled(e.target.checked)}
-              />
+                <input
+                  type="checkbox"
+                  checked={aiSmartEnabled}
+                  disabled={aiSecurityDisabled}
+                  onChange={(e) => setAiSmartEnabled(e.target.checked)}
+                />
               <span className="slider" />
             </label>
           </div>
@@ -285,52 +402,13 @@ const Settings: React.FC = () => {
                   >
                     {aiTesting ? '测试中...' : '测试连接'}
                   </button>
-                  {pendingConfigHash && nativeAvailable && (
-                    <button
-                      className="btn-primary"
-                      onClick={async () => {
-                        const pwd = await promptDialog({
-                          title: '获取配置',
-                          message: '请输入配置密码以解密 AI 配置',
-                          confirmText: '解密',
-                          cancelText: '取消',
-                          inputType: 'password',
-                          placeholder: '请输入密码'
-                        });
-                        if (!pwd) return;
-                        try {
-                          const result = await ConfigBridge.decryptAndStoreConfig({ password: pwd });
-                          if (!result || result.error) {
-                            clearAiConfig();
-                            setLastConfigHash('');
-                            void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
-                            return;
-                          }
-                          if (!result.baseUrl || !result.model) {
-                            clearAiConfig();
-                            setLastConfigHash('');
-                            void alertDialog('配置格式无效，缺少必要字段', { title: '配置无效', confirmText: '我知道了' });
-                            return;
-                          }
-                          updateAiConfig({
-                            apiKey: result.maskedApiKey || '********',
-                            baseUrl: result.baseUrl,
-                            model: result.model
-                          });
-                          setAiNativeReady(true);
-                          setLastConfigHash(pendingConfigHash);
-                          setPendingConfigHash('');
-                          setAiConfigSource('app2');
-                        } catch (err) {
-                          clearAiConfig();
-                          setLastConfigHash('');
-                          void alertDialog('解密失败，请检查密码', { title: '解密失败', confirmText: '我知道了' });
-                        }
-                      }}
-                    >
-                      获取配置
-                    </button>
-                  )}
+                  <button
+                    className="btn-primary"
+                    onClick={isApp2Config ? handleSyncConfig : handleFetchConfig}
+                    disabled={!nativeAvailable || configFetching}
+                  >
+                    {configFetching ? (isApp2Config ? '同步中...' : '获取中...') : isApp2Config ? '同步配置' : '获取配置'}
+                  </button>
                 </div>
               </div>
               <div className="settings-field">

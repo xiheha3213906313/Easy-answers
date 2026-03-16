@@ -8,6 +8,20 @@ export interface ConfigMeta {
 
 export interface ConfigBridgePlugin {
   getConfigMeta(): Promise<ConfigMeta>;
+  getConfigDiagnostics(): Promise<{
+    reason?: string;
+    details?: string;
+    enabled?: boolean;
+    configHash?: string;
+    updatedAt?: number;
+    callerUid?: number;
+    callerPackages?: string;
+    providerFound?: boolean;
+    providerPackage?: string;
+    appInstalled?: boolean;
+  }>;
+  getLaunchSource(): Promise<{ fromApp2: boolean }>;
+  isConfigAppInstalled(): Promise<{ installed: boolean }>;
   decryptAndStoreConfig(options?: { password?: string }): Promise<{
     baseUrl?: string;
     model?: string;
@@ -21,6 +35,8 @@ export interface ConfigBridgePlugin {
     model?: string;
     maskedApiKey?: string;
   }>;
+  getSecurityState(): Promise<{ compromised: boolean; debuggable: boolean }>;
+  openConfigApp(): Promise<{ opened: boolean }>;
   storeDecryptedConfig(options: { jsonString: string }): Promise<{
     baseUrl?: string;
     model?: string;
@@ -52,9 +68,11 @@ export interface ConfigAdminState {
 
 export interface ConfigAdminBridgePlugin {
   getConfigState(): Promise<ConfigAdminState>;
+  isMainAppInstalled(): Promise<{ installed: boolean }>;
   setEnabled(options: { enabled: boolean }): Promise<void>;
   setPayload(options: { payload: string }): Promise<void>;
   clearConfig(): Promise<void>;
+  openMainApp(): Promise<{ opened: boolean }>;
 }
 
 export const ConfigBridge = registerPlugin<ConfigBridgePlugin>('ConfigBridge');

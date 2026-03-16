@@ -2,6 +2,7 @@ package com.example.shuati;
 
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
@@ -12,6 +13,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.example.shuati.security.SecurityGuard;
 
 import org.json.JSONObject;
 
@@ -39,11 +41,21 @@ import javax.crypto.KeyGenerator;
 public class ConfigBridge extends Plugin {
   private static final String AUTHORITY = "com.example.shuati.configprovider";
   private static final Uri CONFIG_URI = Uri.parse("content://" + AUTHORITY + "/config");
+  private static final Uri DIAG_URI = Uri.parse("content://" + AUTHORITY + "/diagnostics");
   private static final String[] PROJECTION = new String[] {
       "enabled",
       "config_hash",
       "encrypted_payload",
       "updated_at"
+  };
+  private static final String[] DIAG_PROJECTION = new String[] {
+      "reason",
+      "details",
+      "enabled",
+      "config_hash",
+      "updated_at",
+      "caller_uid",
+      "caller_packages"
   };
 
   private static final String PREFS = "config_bridge_prefs";
@@ -70,6 +82,53 @@ public class ConfigBridge extends Plugin {
       ret.put("updatedAt", record.updatedAt);
     }
     call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void getConfigDiagnostics(PluginCall call) {
+    JSObject ret = new JSObject();
+    Context context = getContext();
+    ContentResolver resolver = context.getContentResolver();
+    Cursor cursor = null;
+    try {
+      cursor = resolver.query(DIAG_URI, DIAG_PROJECTION, null, null, null);
+      if (cursor == null || !cursor.moveToFirst()) {
+        ret.put("reason", "no_cursor");
+        try {
+          android.content.pm.PackageManager pm = context.getPackageManager();
+          android.content.pm.ProviderInfo providerInfo = pm.resolveContentProvider(AUTHORITY, 0);
+          boolean providerFound = providerInfo != null;
+          ret.put("providerFound", providerFound);
+          if (providerInfo != null && providerInfo.packageName != null) {
+            ret.put("providerPackage", providerInfo.packageName);
+          }
+          boolean appInstalled = false;
+          try {
+            pm.getPackageInfo("com.example.shuati.configapp", 0);
+            appInstalled = true;
+          } catch (Exception ignored) {
+          }
+          ret.put("appInstalled", appInstalled);
+        } catch (Exception ignored) {
+        }
+        call.resolve(ret);
+        return;
+      }
+      ret.put("reason", cursor.isNull(0) ? "" : cursor.getString(0));
+      ret.put("details", cursor.isNull(1) ? "" : cursor.getString(1));
+      ret.put("enabled", cursor.getInt(2) == 1);
+      if (!cursor.isNull(3)) ret.put("configHash", cursor.getString(3));
+      if (!cursor.isNull(4)) ret.put("updatedAt", cursor.getLong(4));
+      if (!cursor.isNull(5)) ret.put("callerUid", cursor.getInt(5));
+      if (!cursor.isNull(6)) ret.put("callerPackages", cursor.getString(6));
+      call.resolve(ret);
+    } catch (Exception ex) {
+      ret.put("reason", "exception");
+      ret.put("details", ex.getMessage());
+      call.resolve(ret);
+    } finally {
+      if (cursor != null) cursor.close();
+    }
   }
 
   @PluginMethod
@@ -161,6 +220,68 @@ public class ConfigBridge extends Plugin {
     if (baseUrl != null) ret.put("baseUrl", baseUrl);
     if (model != null) ret.put("model", model);
     if (mask != null) ret.put("maskedApiKey", mask);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void getSecurityState(PluginCall call) {
+    JSObject ret = new JSObject();
+    Context context = getContext();
+    ret.put("compromised", SecurityGuard.isCompromised(context));
+    ret.put("debuggable", SecurityGuard.isDebuggable(context));
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void openConfigApp(PluginCall call) {
+    JSObject ret = new JSObject();
+    boolean opened = false;
+    try {
+      Context context = getContext();
+      Intent launchIntent = context.getPackageManager()
+          .getLaunchIntentForPackage("com.example.shuati.configapp");
+      if (launchIntent != null) {
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        launchIntent.putExtra("from_app1", true);
+        context.startActivity(launchIntent);
+        opened = true;
+      }
+    } catch (Exception ignored) {
+    }
+    ret.put("opened", opened);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void isConfigAppInstalled(PluginCall call) {
+    JSObject ret = new JSObject();
+    boolean installed = false;
+    try {
+      Context context = getContext();
+      context.getPackageManager().getPackageInfo("com.example.shuati.configapp", 0);
+      installed = true;
+    } catch (Exception ignored) {
+    }
+    ret.put("installed", installed);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void getLaunchSource(PluginCall call) {
+    JSObject ret = new JSObject();
+    boolean fromApp2 = false;
+    try {
+      if (getActivity() != null && getActivity().getIntent() != null) {
+        Intent intent = getActivity().getIntent();
+        fromApp2 = intent.getBooleanExtra("from_app2", false);
+        if (fromApp2) {
+          intent.removeExtra("from_app2");
+          getActivity().setIntent(intent);
+        }
+      }
+    } catch (Exception ignored) {
+    }
+    ret.put("fromApp2", fromApp2);
     call.resolve(ret);
   }
 

@@ -5,6 +5,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import android.content.Context;
+import android.content.Intent;
 
 @CapacitorPlugin(name = "ConfigAdminBridge")
 public class ConfigAdminBridge extends Plugin {
@@ -42,5 +44,39 @@ public class ConfigAdminBridge extends Plugin {
   public void clearConfig(PluginCall call) {
     ConfigStorage.clear(getContext());
     call.resolve();
+  }
+
+  @PluginMethod
+  public void openMainApp(PluginCall call) {
+    JSObject ret = new JSObject();
+    boolean opened = false;
+    try {
+      Context context = getContext();
+      Intent launchIntent = context.getPackageManager()
+          .getLaunchIntentForPackage("com.example.shuati");
+      if (launchIntent != null) {
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        launchIntent.putExtra("from_app2", true);
+        context.startActivity(launchIntent);
+        opened = true;
+      }
+    } catch (Exception ignored) {
+    }
+    ret.put("opened", opened);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void isMainAppInstalled(PluginCall call) {
+    JSObject ret = new JSObject();
+    boolean installed = false;
+    try {
+      Context context = getContext();
+      context.getPackageManager().getPackageInfo("com.example.shuati", 0);
+      installed = true;
+    } catch (Exception ignored) {
+    }
+    ret.put("installed", installed);
+    call.resolve(ret);
   }
 }

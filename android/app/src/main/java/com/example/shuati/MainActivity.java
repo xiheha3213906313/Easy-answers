@@ -62,6 +62,12 @@ public class MainActivity extends BridgeActivity {
     ViewCompat.requestApplyInsets(rootView);
   }
 
+  @Override
+  protected void onNewIntent(android.content.Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+  }
+
   private void updateSafeAreaCss(WebView webView, int top, int right, int bottom, int left) {
     if (top == lastInsetTop && right == lastInsetRight && bottom == lastInsetBottom && left == lastInsetLeft) {
       return;
