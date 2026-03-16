@@ -156,8 +156,8 @@ const Config: React.FC = () => {
             <div className="settings-section">
               <div className="settings-row">
                 <div>
-                  <div className="settings-title">配置功能</div>
-                  <div className="settings-sub">关闭后原软件将忽略配置提供</div>
+                  <div className="settings-title">分发功能</div>
+                  <div className="settings-sub">开启后，轻松答案将能够读取配置密文</div>
                 </div>
                 <label className="switch">
                   <input type="checkbox" checked={enabled} onChange={(e) => handleToggle(e.target.checked)} />
@@ -168,13 +168,13 @@ const Config: React.FC = () => {
 
             <div className="settings-section">
               <div className="settings-title">当前状态</div>
-              <div className="settings-sub">是否已有配置：{hasPayload ? '已配置' : '未配置'}</div>
+              <div className="settings-sub">配置状态：{hasPayload ? '已配置' : '未配置'}</div>
               <div className="settings-sub mt-1 break-all">配置哈希：{configHash || '暂无'}</div>
               <div className="settings-sub mt-1">最近更新时间：{updatedLabel}</div>
             </div>
 
             <div className="settings-section">
-              <div className="settings-title">导入密文</div>
+              <div className="settings-title">导入配置密文</div>
               <div className="settings-sub">可粘贴密文字符串或从文件导入</div>
               <div className="settings-divider" />
               <div className="settings-field">
